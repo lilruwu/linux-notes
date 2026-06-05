@@ -1,0 +1,35 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Linux Notes">
+  <defs>
+    <!-- teal → green diagonal, matches the brand mark -->
+    <linearGradient id="ln-stroke" x1="124" y1="84" x2="388" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5FC6AC"/>
+      <stop offset="0.55" stop-color="#48A98A"/>
+      <stop offset="1" stop-color="#3C8F6B"/>
+    </linearGradient>
+    <linearGradient id="ln-fill" x1="124" y1="84" x2="388" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F5FBF9"/>
+      <stop offset="1" stop-color="#E7F4EF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- document body with folded top-right corner -->
+  <path d="M124 114 Q124 84 154 84 L332 84 L388 140 L388 398 Q388 428 358 428 L154 428 Q124 428 124 398 Z"
+        fill="url(#ln-fill)" stroke="url(#ln-stroke)" stroke-width="13"
+        stroke-linejoin="round"/>
+
+  <!-- turned-over corner -->
+  <path d="M332 84 L388 140 L344 140 Q332 140 332 128 Z"
+        fill="#D2ECE3" stroke="url(#ln-stroke)" stroke-width="13"
+        stroke-linejoin="round"/>
+
+  <!-- terminal prompt: chevron + underscore -->
+  <path d="M178 150 L202 172 L178 194" fill="none" stroke="url(#ln-stroke)"
+        stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="214" y="184" width="40" height="13" rx="6.5" fill="url(#ln-stroke)"/>
+
+  <!-- text / code lines -->
+  <rect x="168" y="228" width="150" height="22" rx="11" fill="url(#ln-stroke)"/>
+  <rect x="168" y="272" width="86"  height="22" rx="11" fill="url(#ln-stroke)"/>
+  <rect x="278" y="272" width="44"  height="22" rx="11" fill="url(#ln-stroke)" opacity="0.55"/>
+  <rect x="168" y="316" width="124" height="22" rx="11" fill="url(#ln-stroke)"/>
+</svg>
