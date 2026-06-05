@@ -1,0 +1,94 @@
+# Linux Notes — Desktop (Tauri + React + SQLite)
+
+A native, fast desktop build of **Linux Notes**, an open-source Apple Notes
+alternative for Linux. The UI is the same warm, paper-inspired design from the
+prototype; the Rust backend stores notes in a local **SQLite** database.
+
+## Features
+
+- Rich-text notes with autosave, tags (create/delete), favourites and search.
+- **Images** inside notes — toolbar button, paste (Ctrl+V, incl. screenshots via
+  the system clipboard), or drag & drop. Images are downscaled (max 1600 px) and
+  embedded in the note, so everything stays in the DB.
+- **To-do checklists** — toolbar button; click the circle to tick items off.
+  Enter continues the list, Enter on an empty item exits it.
+- **Markdown shortcuts** while typing: `# `/`## `/`### ` headings, `- `/`* ` bullets,
+  `1. ` numbered, `> ` quote, `[] ` to-do, and inline `**bold**`, `*italic*`, `` `code` ``.
+- **Trash** with 30-day retention (restore / delete forever / empty), plus a
+  Configuración panel for theme, mode and font size.
+- **Themed app icon** — a notepad mark whose accent follows the active theme
+  (the window icon is retinted at runtime; honoured by desktops that show window icons).
+
+## Stack
+
+- **Shell / backend:** [Tauri 2](https://tauri.app) (Rust) — small binary, native Linux packaging.
+- **UI:** React 18 + Vite (the exact prototype design, pixel-for-pixel).
+- **Storage:** SQLite via `rusqlite` (bundled — no system SQLite needed). The
+  database lives in the platform app-data directory (e.g.
+  `~/.local/share/org.linuxnotes.app/notes.db`). The app starts with **no notes**;
+  a default set of **tags** (Trabajo · Personal · Proyectos · Ideas) is seeded so
+  notes can be categorised right away. Tags can be created and deleted from the UI.
+
+## Architecture
+
+```
+desktop/
+├── index.html            # Vite entry
+├── src/                  # React frontend
+│   ├── main.jsx          # mount
+│   ├── App.jsx           # shell + state, talks to the backend
+│   ├── components.jsx    # Sidebar / NoteListPanel / Editor
+│   ├── tweaks.jsx        # theme panel (Paper/Slate/Forest, light/dark, size)
+│   ├── data.js           # folders + date/color helpers
+│   ├── api.js            # invoke() wrappers → Rust commands
+│   └── notes.css         # design system
+└── src-tauri/            # Rust backend
+    ├── src/lib.rs        # commands + app setup
+    ├── src/db.rs         # SQLite schema, queries, first-run seed
+    └── tauri.conf.json   # window + bundle config
+```
+
+The frontend persists notes exclusively through the backend
+(`list_notes`, `create_note`, `update_note`, `delete_note`, `toggle_favorite`).
+Only theme preferences are kept in `localStorage`.
+
+## Develop
+
+Requires Rust, Node 18+, and the Tauri Linux system deps
+(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`).
+
+```bash
+cd desktop
+npm install
+npm run tauri dev      # launches the app with hot-reload
+```
+
+## Build a release bundle
+
+```bash
+cd desktop
+npm run tauri build    # produces .deb / .AppImage / .rpm in src-tauri/target/release/bundle
+```
+
+Verify the `.deb` is well-formed before installing:
+
+```bash
+ar t "src-tauri/target/release/bundle/deb/Linux Notes_0.1.0_amd64.deb"
+# should print: debian-binary / control.tar.gz / data.tar.gz
+```
+
+### Troubleshooting: "malformed archive" / corrupt `.deb`
+
+This almost always means the build **failed** (often the linker was OOM-killed on
+a low-memory machine such as WSL) and `ar`/`dpkg` is reading a stale `.deb` from a
+previous attempt. Fixes:
+
+```bash
+rm -rf src-tauri/target/release/bundle   # remove stale artifacts
+npm run tauri build                      # must end with "Finished 1 bundle at ..."
+```
+
+The `release` profile here deliberately avoids `lto`/`codegen-units = 1` so the
+final link stays light on memory. If you still hit OOM, give WSL more RAM via
+`~/.wslconfig` (`[wsl2]\nmemory=8GB`) or build the AppImage instead
+(`npm run tauri build --bundles appimage`).
