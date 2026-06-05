@@ -11,11 +11,17 @@ prototype; the Rust backend stores notes in a local **SQLite** database.
   the system clipboard), or drag & drop. Images are downscaled (max 1600 px) and
   embedded in the note, so everything stays in the DB.
 - **To-do checklists** — toolbar button; click the circle to tick items off.
-  Enter continues the list, Enter on an empty item exits it.
+  Enter continues the list, Enter on an empty item exits it. **Drag the ⠿ handle
+  to reorder** items.
+- **Find in note** — magnifier in the toolbar; highlights matches (CSS Custom
+  Highlight API) with next/prev navigation.
+- **Remembers** the last opened note and tag across launches.
 - **Markdown shortcuts** while typing: `# `/`## `/`### ` headings, `- `/`* ` bullets,
   `1. ` numbered, `> ` quote, `[] ` to-do, and inline `**bold**`, `*italic*`, `` `code` ``.
 - **Trash** with 30-day retention (restore / delete forever / empty), plus a
   Configuración panel for theme, mode and font size.
+- **Backup** — export all notes + tags to a JSON file and import it on another
+  machine (Configuración → Datos). Import merges by id, so it's non-destructive.
 - **Themed app icon** — a notepad mark whose accent follows the active theme
   (the window icon is retinted at runtime; honoured by desktops that show window icons).
 

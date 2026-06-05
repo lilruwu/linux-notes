@@ -4,6 +4,7 @@ import { Sidebar, NoteListPanel, Editor, NewTagModal } from "./components.jsx";
 import { useSettings, SettingsModal } from "./settings.jsx";
 import { ConfirmModal } from "./ui.jsx";
 import { applyThemedIcon } from "./appicon.js";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api.js";
 
 export default function App() {
@@ -23,13 +24,16 @@ export default function App() {
   const [trash, setTrash] = React.useState([]);
   const [folders, setFolders] = React.useState([]);
   const [selectedId, setSelectedId] = React.useState(null);
-  const [selectedFolder, setSelectedFolder] = React.useState("all");
+  const [selectedFolder, setSelectedFolder] = React.useState(() => {
+    try { return localStorage.getItem("linux-notes-folder") || "all"; } catch { return "all"; }
+  });
   const [searchQuery, setSearchQuery] = React.useState("");
   const searchRef = React.useRef(null);
 
   const [newTag, setNewTag] = React.useState({ open: false, noteId: null, error: "" });
   // Generic confirmation dialog: { title, message, danger, confirmLabel, onConfirm } | null
   const [confirm, setConfirm] = React.useState(null);
+  const [importMsg, setImportMsg] = React.useState("");
 
   const trashMode = selectedFolder === "trash";
 
@@ -39,9 +43,27 @@ export default function App() {
 
   React.useEffect(() => {
     api.listFolders().then(setFolders).catch((e) => console.error("Load folders failed:", e));
-    reloadNotes().catch((e) => console.error("Load notes failed:", e));
+    api
+      .listNotes()
+      .then((rows) => {
+        setNotes(rows);
+        // Restore the last opened note if it still exists.
+        let saved = null;
+        try { saved = localStorage.getItem("linux-notes-note"); } catch {}
+        const pick = rows.find((n) => n.id === saved) || rows[0];
+        if (pick) setSelectedId(pick.id);
+      })
+      .catch((e) => console.error("Load notes failed:", e));
     reloadTrash().catch((e) => console.error("Load trash failed:", e));
   }, [reloadNotes, reloadTrash]);
+
+  // Persist the current note / folder so they're restored next launch.
+  React.useEffect(() => {
+    try { localStorage.setItem("linux-notes-folder", selectedFolder); } catch {}
+  }, [selectedFolder]);
+  React.useEffect(() => {
+    try { if (selectedId) localStorage.setItem("linux-notes-note", selectedId); } catch {}
+  }, [selectedId]);
 
   // ── Derived: filtered + sorted ──
   const filteredNotes = React.useMemo(() => {
@@ -227,6 +249,42 @@ export default function App() {
     setSearchQuery("");
   };
 
+  // ── Backup: export / import ──
+  const handleExport = React.useCallback(async () => {
+    try {
+      const path = await save({
+        defaultPath: "linux-notes-backup.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await api.exportToPath(path);
+      setImportMsg("Copia exportada correctamente.");
+    } catch (e) {
+      console.error("Export failed:", e);
+      setImportMsg("No se pudo exportar la copia.");
+    }
+  }, []);
+
+  const handleImport = React.useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      const count = await api.importFromPath(path);
+      const [n, t, f] = await Promise.all([api.listNotes(), api.listTrash(), api.listFolders()]);
+      setNotes(n);
+      setTrash(t);
+      setFolders(f);
+      setImportMsg(`Importadas ${count} nota${count === 1 ? "" : "s"}.`);
+    } catch (e) {
+      console.error("Import failed:", e);
+      setImportMsg("No se pudo importar el archivo.");
+    }
+  }, []);
+
   // ── Global keyboard shortcuts ──
   React.useEffect(() => {
     const handler = (e) => {
@@ -298,9 +356,12 @@ export default function App() {
 
       <SettingsModal
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => { setSettingsOpen(false); setImportMsg(""); }}
         settings={settings}
         onChange={setSetting}
+        onExport={handleExport}
+        onImport={handleImport}
+        importMsg={importMsg}
       />
     </div>
   );

@@ -29,7 +29,7 @@ export function useSettings(defaults) {
   return [values, set];
 }
 
-export function SettingsModal({ open, onClose, settings, onChange }) {
+export function SettingsModal({ open, onClose, settings, onChange, onExport, onImport, importMsg }) {
   return (
     <Modal open={open} title="Configuración" onClose={onClose} width={400}>
       <div className="settings-section">Apariencia</div>
@@ -68,6 +68,16 @@ export function SettingsModal({ open, onClose, settings, onChange }) {
           onChange={(v) => onChange("fontSize", v)}
         />
       </Field>
+
+      <div className="settings-section">Datos</div>
+      <p className="settings-hint">
+        Exporta una copia de seguridad de todas tus notas y etiquetas, o impórtala en otro equipo.
+      </p>
+      <div className="settings-actions">
+        <button className="btn-ghost" onClick={onExport}>Exportar copia…</button>
+        <button className="btn-ghost" onClick={onImport}>Importar copia…</button>
+      </div>
+      {importMsg && <div className="settings-note">{importMsg}</div>}
     </Modal>
   );
 }

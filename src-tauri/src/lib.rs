@@ -231,12 +231,57 @@ fn set_note_folder(
         .ok_or_else(|| format!("Note {id} not found"))
 }
 
+// ── Export / import ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportData {
+    app: String,
+    version: u32,
+    folders: Vec<Folder>,
+    notes: Vec<Note>,
+}
+
+/// Write all folders + notes to `path` as a JSON backup.
+#[tauri::command]
+fn export_to_path(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let data = ExportData {
+        app: "linux-notes".into(),
+        version: 1,
+        folders: db::list_folders(&conn).map_err(|e| e.to_string())?,
+        notes: db::list_all_notes(&conn).map_err(|e| e.to_string())?,
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Merge a JSON backup into the database (upsert by id / tag name). Returns the
+/// number of notes imported.
+#[tauri::command]
+fn import_from_path(path: String, state: tauri::State<'_, AppState>) -> Result<usize, String> {
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let data: ExportData =
+        serde_json::from_str(&json).map_err(|_| "El archivo no es una copia válida".to_string())?;
+    let mut guard = state.db.lock().map_err(|e| e.to_string())?;
+    let tx = guard.transaction().map_err(|e| e.to_string())?;
+    for f in &data.folders {
+        db::upsert_folder_ignore(&tx, &f.name, &f.color).map_err(|e| e.to_string())?;
+    }
+    for n in &data.notes {
+        db::upsert_note(&tx, n).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(data.notes.len())
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Store the database in the platform-appropriate app-data directory.
             let dir = app.path().app_data_dir()?;
@@ -262,7 +307,9 @@ pub fn run() {
             list_trash,
             restore_note,
             purge_note,
-            empty_trash
+            empty_trash,
+            export_to_path,
+            import_from_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

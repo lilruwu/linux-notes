@@ -59,3 +59,12 @@ export function createFolder(name, color) {
 export function deleteFolder(name) {
   return invoke("delete_folder", { name });
 }
+
+// ── Backup ──
+export function exportToPath(path) {
+  return invoke("export_to_path", { path });
+}
+
+export function importFromPath(path) {
+  return invoke("import_from_path", { path }); // resolves to number of notes imported
+}

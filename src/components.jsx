@@ -126,6 +126,15 @@ function IcCheckSquare() {
   );
 }
 
+function IcSearch() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <circle cx="7" cy="7" r="4.3" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M10.2 10.2L14 14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IcSettings() {
   return (
     <svg className="nav-icon" viewBox="0 0 16 16" fill="none">
@@ -371,12 +380,22 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
   const saveTimer = React.useRef(null);
   const activeId = React.useRef(null);
   const fileInputRef = React.useRef(null);
+  const draggedTodoRef = React.useRef(null);
+
+  // In-note find state
+  const [find, setFind] = React.useState({ open: false, query: "", count: 0, index: 0 });
+  const findRanges = React.useRef([]);
 
   React.useEffect(() => {
     if (!note || note.id === activeId.current) return;
     activeId.current = note.id;
     if (titleRef.current) titleRef.current.textContent = note.title;
-    if (contentRef.current) contentRef.current.innerHTML = note.content;
+    if (contentRef.current) {
+      contentRef.current.innerHTML = note.content;
+      injectTodoHandles(contentRef.current);
+    }
+    clearFind();
+    setFind({ open: false, query: "", count: 0, index: 0 });
     if (!note.title && titleRef.current) {
       setTimeout(() => titleRef.current && titleRef.current.focus(), 60);
     }
@@ -387,7 +406,8 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     saveTimer.current = setTimeout(() => {
       if (!note) return;
       const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
-      const content = (contentRef.current && contentRef.current.innerHTML) || "";
+      // Strip the zero-width spaces used as empty-block caret anchors.
+      const content = ((contentRef.current && contentRef.current.innerHTML) || "").replace(/\u200B/g, "");
       onUpdate(note.id, { title, content });
     }, 400);
   }, [note, onUpdate]);
@@ -395,8 +415,117 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
   const fmt = (cmd, value) => {
     document.execCommand(cmd, false, value || undefined);
     contentRef.current && contentRef.current.focus();
+    refreshMarks();
     scheduleSave();
   };
+
+  // ── Block formatting (headings, quote, code) via deterministic DOM edits ──
+  // execCommand("formatBlock") is unreliable in WebKitGTK (no-ops on empty
+  // blocks, leaks formatting at the editor root), so we manage blocks ourselves.
+
+  // The block element (direct child of the editor) holding the caret, or null.
+  const currentBlockEl = () => {
+    const sel = window.getSelection();
+    if (!sel || !sel.anchorNode || !contentRef.current) return null;
+    let n = sel.anchorNode;
+    if (n.nodeType === 3) n = n.parentElement;
+    while (n && n.parentElement && n.parentElement !== contentRef.current) n = n.parentElement;
+    return n && n.nodeType === 1 && n.parentElement === contentRef.current ? n : null;
+  };
+
+  // Ensure the current line is wrapped in a real block element; returns it.
+  const ensureLineBlock = () => {
+    const existing = currentBlockEl();
+    if (existing) return existing;
+    // Loose inline content directly under the root (the first line of a note):
+    // wrap everything into a single <div>.
+    const div = document.createElement("div");
+    while (contentRef.current.firstChild) div.appendChild(contentRef.current.firstChild);
+    if (!div.firstChild) div.appendChild(document.createElement("br"));
+    contentRef.current.appendChild(div);
+    const r = document.createRange();
+    r.selectNodeContents(div);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return div;
+  };
+
+  const replaceBlockTag = (block, tag) => {
+    const el = document.createElement(tag);
+    while (block.firstChild) el.appendChild(block.firstChild);
+    block.replaceWith(el);
+    const r = document.createRange();
+    const sel = window.getSelection();
+    if (el.textContent.replace(/\u200B/g, "").length === 0) {
+      // Empty block: seed a zero-width space so the caret lives in a real text
+      // node. Typing then appends to it and stays inside the block — WebKitGTK
+      // drops the formatting if you type into a block that holds only a <br>.
+      el.textContent = "\u200B";
+      r.setStart(el.firstChild, 1);
+    } else {
+      r.selectNodeContents(el);
+      r.collapse(false);
+    }
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return el;
+  };
+
+  // Always set the current line to `tag`.
+  const setBlock = (tag) => {
+    const block = ensureLineBlock();
+    if (block) replaceBlockTag(block, tag);
+    contentRef.current && contentRef.current.focus();
+    refreshMarks();
+    scheduleSave();
+  };
+
+  // Toggle the current line between `tag` and a normal paragraph (toolbar buttons).
+  const toggleBlock = (tag) => {
+    const block = ensureLineBlock();
+    if (!block) return;
+    const cur = block.tagName.toLowerCase();
+    replaceBlockTag(block, cur === tag ? "div" : tag);
+    contentRef.current && contentRef.current.focus();
+    refreshMarks();
+    scheduleSave();
+  };
+
+  const handleContentInput = () => {
+    refreshMarks();
+    scheduleSave();
+  };
+
+  // ── Active toolbar state ──
+  const [marks, setMarks] = React.useState({});
+  const refreshMarks = React.useCallback(() => {
+    const el = contentRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.anchorNode || !el.contains(sel.anchorNode)) return;
+    let node = sel.anchorNode;
+    if (node.nodeType === 3) node = node.parentElement;
+    const blockEl = node && node.closest ? node.closest("h1,h2,h3,pre,blockquote") : null;
+    const q = (c) => {
+      try { return document.queryCommandState(c); } catch { return false; }
+    };
+    setMarks({
+      bold: q("bold"),
+      italic: q("italic"),
+      underline: q("underline"),
+      ul: q("insertUnorderedList"),
+      ol: q("insertOrderedList"),
+      block: blockEl ? blockEl.tagName.toLowerCase() : "",
+    });
+  }, []);
+
+  React.useEffect(() => {
+    const handler = () => refreshMarks();
+    document.addEventListener("selectionchange", handler);
+    return () => document.removeEventListener("selectionchange", handler);
+  }, [refreshMarks]);
 
   // ── To-do lists ──
   // Find the enclosing element matching `selector` for the current caret.
@@ -421,6 +550,16 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     sel.addRange(range);
   };
 
+  const makeDragHandle = () => {
+    const h = document.createElement("span");
+    h.className = "todo-drag";
+    h.setAttribute("contenteditable", "false");
+    h.setAttribute("draggable", "true");
+    h.setAttribute("aria-hidden", "true");
+    h.textContent = "⠿";
+    return h;
+  };
+
   const createTodoEl = (text = "") => {
     const todo = document.createElement("div");
     todo.className = "todo";
@@ -431,9 +570,18 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     const body = document.createElement("div");
     body.className = "todo-body";
     body.textContent = text;
+    todo.appendChild(makeDragHandle());
     todo.appendChild(check);
     todo.appendChild(body);
     return todo;
+  };
+
+  // Add drag handles to to-dos loaded from saved HTML that predate them.
+  const injectTodoHandles = (root) => {
+    if (!root) return;
+    root.querySelectorAll(".todo").forEach((todo) => {
+      if (!todo.querySelector(".todo-drag")) todo.insertBefore(makeDragHandle(), todo.firstChild);
+    });
   };
 
   const insertTodo = () => {
@@ -531,7 +679,39 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     if (dataUrl) insertDataUrl(dataUrl, false);
   };
 
+  // ── Drag-reorder to-dos ──
+  const handleDragStart = (e) => {
+    const handle = e.target.closest && e.target.closest(".todo-drag");
+    if (!handle || !contentRef.current.contains(handle)) return;
+    const todo = handle.closest(".todo");
+    draggedTodoRef.current = todo;
+    todo.classList.add("dragging");
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", ""); // Firefox needs data set
+    }
+  };
+
+  const handleDragEnd = () => {
+    if (draggedTodoRef.current) draggedTodoRef.current.classList.remove("dragging");
+    draggedTodoRef.current = null;
+  };
+
   const handleDrop = (e) => {
+    // Reordering a to-do takes precedence over image drops.
+    const dragged = draggedTodoRef.current;
+    if (dragged) {
+      e.preventDefault();
+      const targetTodo = e.target.closest && e.target.closest(".todo");
+      if (targetTodo && targetTodo !== dragged && contentRef.current.contains(targetTodo)) {
+        const rect = targetTodo.getBoundingClientRect();
+        const after = e.clientY > rect.top + rect.height / 2;
+        targetTodo.parentNode.insertBefore(dragged, after ? targetTodo.nextSibling : targetTodo);
+        scheduleSave();
+      }
+      handleDragEnd();
+      return;
+    }
     const files = e.dataTransfer && e.dataTransfer.files;
     if (!files || !files.length) return;
     const img = [...files].find((f) => f.type.startsWith("image/"));
@@ -539,6 +719,83 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       e.preventDefault();
       embedImageFile(img);
     }
+  };
+
+  // ── In-note find (CSS Custom Highlight API) ──
+  const clearFind = () => {
+    findRanges.current = [];
+    try {
+      if (window.CSS && CSS.highlights) {
+        CSS.highlights.delete("note-find");
+        CSS.highlights.delete("note-find-current");
+      }
+    } catch {}
+  };
+
+  const paintFind = (index) => {
+    if (!window.CSS || !CSS.highlights || typeof Highlight === "undefined") return;
+    const ranges = findRanges.current;
+    CSS.highlights.delete("note-find");
+    CSS.highlights.delete("note-find-current");
+    if (!ranges.length) return;
+    const rest = ranges.filter((_, i) => i !== index);
+    if (rest.length) CSS.highlights.set("note-find", new Highlight(...rest));
+    if (ranges[index]) CSS.highlights.set("note-find-current", new Highlight(ranges[index]));
+  };
+
+  const runFind = (query) => {
+    findRanges.current = [];
+    if (query && contentRef.current) {
+      const q = query.toLowerCase();
+      const walker = document.createTreeWalker(contentRef.current, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue.toLowerCase();
+        let i = text.indexOf(q);
+        while (i !== -1) {
+          const r = document.createRange();
+          r.setStart(node, i);
+          r.setEnd(node, i + q.length);
+          findRanges.current.push(r);
+          i = text.indexOf(q, i + q.length);
+        }
+      }
+    }
+    const count = findRanges.current.length;
+    setFind((f) => ({ ...f, query, count, index: 0 }));
+    paintFind(0);
+    if (count) scrollToMatch(0);
+  };
+
+  const scrollToMatch = (index) => {
+    const r = findRanges.current[index];
+    const el = r && (r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+
+  const gotoMatch = (dir) => {
+    const count = findRanges.current.length;
+    if (!count) return;
+    setFind((f) => {
+      const index = (f.index + dir + count) % count;
+      paintFind(index);
+      scrollToMatch(index);
+      return { ...f, index };
+    });
+  };
+
+  const openFind = () => {
+    setFind((f) => ({ ...f, open: true }));
+    setTimeout(() => {
+      const inp = document.getElementById("note-find-input");
+      if (inp) inp.focus();
+    }, 30);
+  };
+
+  const closeFind = () => {
+    clearFind();
+    setFind({ open: false, query: "", count: 0, index: 0 });
+    contentRef.current && contentRef.current.focus();
   };
 
   // ── Markdown shortcuts ──
@@ -583,20 +840,23 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     const action = BLOCK_RULES[pre.toString()];
     if (!action) return false;
     e.preventDefault();
-    pre.deleteContents();
+    pre.deleteContents(); // remove the markdown prefix ("#", ">", "-", …)
     if (action[0] === "todo") {
       convertBlockToTodo(block);
     } else {
-      // The live selection pointed at the now-deleted token; put the caret back
-      // at the start of the block before running the formatting command.
+      // deleteContents (on a cloned range) leaves the *live* selection pointing
+      // at the removed nodes. Restore a valid caret at the line start before
+      // formatting — otherwise setBlock/execCommand act on a stale selection
+      // (this was why headings reverted while toolbar buttons worked).
       const caret = document.createRange();
       caret.setStart(block, 0);
       caret.collapse(true);
       sel.removeAllRanges();
       sel.addRange(caret);
-      if (action[0] === "formatBlock") document.execCommand("formatBlock", false, action[1]);
-      else document.execCommand(action[0]);
+      if (action[0] === "formatBlock") setBlock(action[1]); // h1/h2/h3/blockquote
+      else document.execCommand(action[0]); // lists
     }
+    refreshMarks();
     scheduleSave();
     return true;
   };
@@ -651,6 +911,32 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       }
       return;
     }
+    // Enter at the end of a heading/quote drops to a normal line (exits the style).
+    if (e.key === "Enter") {
+      const hb = currentBlockEl();
+      const sel = window.getSelection();
+      if (
+        hb &&
+        /^(h1|h2|h3|blockquote)$/.test(hb.tagName.toLowerCase()) &&
+        sel &&
+        sel.isCollapsed &&
+        sel.anchorOffset === (sel.anchorNode.nodeType === 3 ? sel.anchorNode.length : sel.anchorNode.childNodes.length) &&
+        !sel.anchorNode.nextSibling
+      ) {
+        e.preventDefault();
+        const div = document.createElement("div");
+        div.appendChild(document.createElement("br"));
+        hb.after(div);
+        const r = document.createRange();
+        r.setStart(div, 0);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        scheduleSave();
+        refreshMarks();
+        return;
+      }
+    }
     // Enter inside a to-do continues the checklist; Enter on an empty item exits it.
     if (e.key === "Enter") {
       const todo = closestInContent(".todo");
@@ -703,16 +989,16 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     <div className="editor-panel">
       {/* ── Toolbar ── */}
       <div className="editor-toolbar">
-        <button className="toolbar-btn bold" onClick={() => fmt("bold")} title="Negrita (Ctrl+B)">B</button>
-        <button className="toolbar-btn italic" onClick={() => fmt("italic")} title="Cursiva (Ctrl+I)">I</button>
-        <button className="toolbar-btn underline" onClick={() => fmt("underline")} title="Subrayado (Ctrl+U)">U</button>
+        <button className={`toolbar-btn bold${marks.bold ? " active" : ""}`} onClick={() => fmt("bold")} title="Negrita (Ctrl+B)">B</button>
+        <button className={`toolbar-btn italic${marks.italic ? " active" : ""}`} onClick={() => fmt("italic")} title="Cursiva (Ctrl+I)">I</button>
+        <button className={`toolbar-btn underline${marks.underline ? " active" : ""}`} onClick={() => fmt("underline")} title="Subrayado (Ctrl+U)">U</button>
         <div className="toolbar-sep" />
-        <button className="toolbar-btn" onClick={() => fmt("formatBlock", "h1")} title="Título 1">H1</button>
-        <button className="toolbar-btn" onClick={() => fmt("formatBlock", "h2")} title="Título 2">H2</button>
-        <button className="toolbar-btn" onClick={() => fmt("formatBlock", "h3")} title="Título 3">H3</button>
+        <button className={`toolbar-btn${marks.block === "h1" ? " active" : ""}`} onClick={() => toggleBlock("h1")} title="Título 1">H1</button>
+        <button className={`toolbar-btn${marks.block === "h2" ? " active" : ""}`} onClick={() => toggleBlock("h2")} title="Título 2">H2</button>
+        <button className={`toolbar-btn${marks.block === "h3" ? " active" : ""}`} onClick={() => toggleBlock("h3")} title="Título 3">H3</button>
         <div className="toolbar-sep" />
-        <button className="toolbar-btn" onClick={() => fmt("insertUnorderedList")} title="Lista">· Lista</button>
-        <button className="toolbar-btn" onClick={() => fmt("insertOrderedList")} title="Lista numerada">1. Lista</button>
+        <button className={`toolbar-btn${marks.ul ? " active" : ""}`} onClick={() => fmt("insertUnorderedList")} title="Lista">· Lista</button>
+        <button className={`toolbar-btn${marks.ol ? " active" : ""}`} onClick={() => fmt("insertOrderedList")} title="Lista numerada">1. Lista</button>
         <button className="toolbar-btn icon" onClick={insertTodo} title="Lista de tareas">
           <IcCheckSquare />
         </button>
@@ -720,11 +1006,18 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
         <button className="toolbar-btn icon" onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Insertar imagen">
           <IcImage />
         </button>
-        <button className="toolbar-btn" onClick={() => fmt("formatBlock", "pre")} title="Bloque de código" style={{ fontFamily: "monospace", letterSpacing: "0.03em" }}>
+        <button className={`toolbar-btn${marks.block === "pre" ? " active" : ""}`} onClick={() => toggleBlock("pre")} title="Bloque de código" style={{ fontFamily: "monospace", letterSpacing: "0.03em" }}>
           {"</>"}
         </button>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: "2px", alignItems: "center" }}>
+          <button
+            className={`toolbar-btn icon${find.open ? " active" : ""}`}
+            onClick={() => (find.open ? closeFind() : openFind())}
+            title="Buscar en la nota"
+          >
+            <IcSearch />
+          </button>
           <button
             className={`toolbar-btn fav${note.favorite ? " on" : ""}`}
             onClick={() => onToggleFavorite(note.id)}
@@ -737,6 +1030,28 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           </button>
         </div>
       </div>
+
+      {find.open && (
+        <div className="find-bar">
+          <IcSearch />
+          <input
+            id="note-find-input"
+            className="find-input"
+            type="text"
+            placeholder="Buscar en la nota…"
+            value={find.query}
+            onChange={(e) => runFind(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); }
+              if (e.key === "Escape") { e.preventDefault(); closeFind(); }
+            }}
+          />
+          <span className="find-count">{find.count ? `${find.index + 1}/${find.count}` : "0/0"}</span>
+          <button className="find-nav" onClick={() => gotoMatch(-1)} title="Anterior" disabled={!find.count}>↑</button>
+          <button className="find-nav" onClick={() => gotoMatch(1)} title="Siguiente" disabled={!find.count}>↓</button>
+          <button className="find-nav" onClick={closeFind} title="Cerrar">✕</button>
+        </div>
+      )}
 
       {/* ── Body ── */}
       <div className="editor-body">
@@ -761,11 +1076,17 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           className="editor-content"
           contentEditable
           suppressContentEditableWarning
-          onInput={scheduleSave}
+          onInput={handleContentInput}
           onKeyDown={handleContentKeyDown}
+          onKeyUp={refreshMarks}
+          onMouseUp={refreshMarks}
+          onFocus={refreshMarks}
+          onBlur={() => setMarks({})}
           onClick={handleContentClick}
           onPaste={handlePaste}
           onDrop={handleDrop}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
           onDragOver={(e) => e.preventDefault()}
           data-placeholder="Empieza a escribir…"
         />

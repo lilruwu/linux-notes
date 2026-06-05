@@ -80,6 +80,35 @@ pub fn get_note(conn: &Connection, id: &str) -> Result<Option<Note>> {
     conn.query_row(&sql, params![id], row_to_note).optional()
 }
 
+/// Every note (active and trashed) — used for full export/backup.
+pub fn list_all_notes(conn: &Connection) -> Result<Vec<Note>> {
+    let sql = format!("SELECT {SELECT_COLS} FROM notes ORDER BY updated DESC, created DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_note)?;
+    rows.collect()
+}
+
+/// Insert-or-replace a whole note (used when importing a backup).
+pub fn upsert_note(conn: &Connection, note: &Note) -> Result<()> {
+    conn.execute(
+        "INSERT INTO notes (id, title, content, folder, favorite, created, updated, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET
+            title=?2, content=?3, folder=?4, favorite=?5, created=?6, updated=?7, deleted_at=?8",
+        params![
+            note.id,
+            note.title,
+            note.content,
+            note.folder,
+            note.favorite as i64,
+            note.created,
+            note.updated,
+            note.deleted_at
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn insert_note(conn: &Connection, note: &Note) -> Result<()> {
     conn.execute(
         "INSERT INTO notes (id, title, content, folder, favorite, created, updated)
@@ -201,6 +230,17 @@ pub fn insert_folder(conn: &Connection, name: &str, color: &str) -> Result<()> {
         })?;
     conn.execute(
         "INSERT INTO folders (name, color, position) VALUES (?1, ?2, ?3)",
+        params![name, color, next_pos],
+    )?;
+    Ok(())
+}
+
+/// Insert a folder only if its name doesn't already exist (used when importing).
+pub fn upsert_folder_ignore(conn: &Connection, name: &str, color: &str) -> Result<()> {
+    let next_pos: i64 =
+        conn.query_row("SELECT COALESCE(MAX(position), 0) + 1 FROM folders", [], |r| r.get(0))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO folders (name, color, position) VALUES (?1, ?2, ?3)",
         params![name, color, next_pos],
     )?;
     Ok(())
