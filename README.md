@@ -83,6 +83,22 @@ ar t "src-tauri/target/release/bundle/deb/Linux Notes_0.1.0_amd64.deb"
 # should print: debian-binary / control.tar.gz / data.tar.gz
 ```
 
+## Automated releases (GitHub Actions)
+
+`.github/workflows/release.yml` builds the `.deb` and `.AppImage` in the cloud and
+publishes a **GitHub Release** whenever you push a version tag. The app version in
+`package.json`, `Cargo.toml` and `tauri.conf.json` is synced from the tag
+automatically, so all you do is:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow (also runnable from the Actions tab via "Run workflow") creates a
+**draft** release with the installers attached — review it and hit *Publish*.
+No secrets to configure: it uses the built-in `GITHUB_TOKEN`.
+
 ### Troubleshooting: "malformed archive" / corrupt `.deb`
 
 This almost always means the build **failed** (often the linker was OOM-killed on
