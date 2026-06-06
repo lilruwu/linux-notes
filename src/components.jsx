@@ -697,6 +697,27 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     sel.addRange(range);
   };
 
+  // True if the collapsed caret sits at the very start of `el`.
+  const caretAtStartOf = (el) => {
+    const sel = window.getSelection();
+    if (!sel || !sel.isCollapsed || !sel.rangeCount || !el) return false;
+    const r = sel.getRangeAt(0);
+    if (!el.contains(r.startContainer)) return false;
+    const test = document.createRange();
+    test.selectNodeContents(el);
+    test.setEnd(r.startContainer, r.startOffset);
+    return test.toString().replace(/\u200B/g, "").length === 0;
+  };
+
+  const placeCaretStart = (el) => {
+    const r = document.createRange();
+    r.setStart(el, 0);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  };
+
   const makeDragHandle = () => {
     const h = document.createElement("span");
     h.className = "todo-drag";
@@ -1051,6 +1072,50 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       if (k === "i") { e.preventDefault(); fmt("italic"); }
       if (k === "u") { e.preventDefault(); fmt("underline"); }
       return;
+    }
+    // Backspace near a to-do's contenteditable=false parts (checkbox / drag
+    // handle) makes WebKitGTK delete way too much. Handle these boundaries
+    // ourselves instead of letting the browser do it.
+    if (e.key === "Backspace") {
+      const todo = closestInContent(".todo");
+      if (todo) {
+        const body = todo.querySelector(".todo-body");
+        if (body && caretAtStartOf(body)) {
+          // At the start of a to-do → turn it back into a normal line.
+          e.preventDefault();
+          const div = document.createElement("div");
+          while (body.firstChild) div.appendChild(body.firstChild);
+          if (!div.firstChild) div.appendChild(document.createElement("br"));
+          todo.replaceWith(div);
+          placeCaretStart(div);
+          scheduleSave();
+          refreshMarks();
+          return;
+        }
+      } else {
+        // At the start of a normal line right below a to-do → merge into it.
+        const block = currentBlockEl();
+        const prev = block && block.previousElementSibling;
+        if (block && prev && prev.classList && prev.classList.contains("todo") && caretAtStartOf(block)) {
+          e.preventDefault();
+          const body = prev.querySelector(".todo-body");
+          if (body) {
+            const marker = block.firstChild;
+            while (block.firstChild) body.appendChild(block.firstChild);
+            block.remove();
+            const r = document.createRange();
+            if (marker && marker.parentNode === body) r.setStartBefore(marker);
+            else { r.selectNodeContents(body); r.collapse(false); }
+            r.collapse(true);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+            scheduleSave();
+            refreshMarks();
+          }
+          return;
+        }
+      }
     }
     if (e.key === " ") {
       try {
