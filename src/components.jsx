@@ -386,6 +386,9 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
   const [find, setFind] = React.useState({ open: false, query: "", count: 0, index: 0 });
   const findRanges = React.useRef([]);
 
+  // Undo/redo history (snapshot-based, since we mutate the DOM directly)
+  const histRef = React.useRef({ stack: [], idx: -1 });
+
   React.useEffect(() => {
     if (!note || note.id === activeId.current) return;
     activeId.current = note.id;
@@ -393,9 +396,11 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     if (contentRef.current) {
       contentRef.current.innerHTML = note.content;
       injectTodoHandles(contentRef.current);
+      normalizeRoot();
     }
     clearFind();
     setFind({ open: false, query: "", count: 0, index: 0 });
+    resetHistory();
     if (!note.title && titleRef.current) {
       setTimeout(() => titleRef.current && titleRef.current.focus(), 60);
     }
@@ -405,12 +410,154 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       if (!note) return;
+      normalizeWithCaret(); // keep every line wrapped in a block (structural safety)
+      recordHistory(); // commit an undo snapshot at each pause
       const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
       // Strip the zero-width spaces used as empty-block caret anchors.
       const content = ((contentRef.current && contentRef.current.innerHTML) || "").replace(/\u200B/g, "");
       onUpdate(note.id, { title, content });
     }, 400);
   }, [note, onUpdate]);
+
+  // \u2500\u2500 Caret <-> character offset (for history & normalization) \u2500\u2500
+  const caretOffset = () => {
+    const sel = window.getSelection();
+    const root = contentRef.current;
+    if (!sel || !sel.rangeCount || !root || !root.contains(sel.anchorNode)) return null;
+    const range = sel.getRangeAt(0);
+    const pre = range.cloneRange();
+    pre.selectNodeContents(root);
+    pre.setEnd(range.endContainer, range.endOffset);
+    return pre.toString().length;
+  };
+
+  const restoreCaret = (offset) => {
+    const root = contentRef.current;
+    if (offset == null || !root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let remaining = offset;
+    let node;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue.length;
+      if (remaining <= len) {
+        const r = document.createRange();
+        r.setStart(node, remaining);
+        r.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return;
+      }
+      remaining -= len;
+    }
+    const r = document.createRange();
+    r.selectNodeContents(root);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  };
+
+  // \u2500\u2500 Structural normalization: wrap loose root-level inline runs in <div> \u2500\u2500
+  // Prevents WebKit from deleting unrelated content when a sibling list/block
+  // is removed (the "delete a list and the text above vanishes" bug).
+  const BLOCK_RE = /^(DIV|P|H1|H2|H3|UL|OL|BLOCKQUOTE|PRE|HR|TABLE)$/;
+  const isBlockNode = (n) => n.nodeType === 1 && BLOCK_RE.test(n.tagName);
+
+  const normalizeRoot = () => {
+    const root = contentRef.current;
+    if (!root) return;
+    let run = [];
+    const flush = (before) => {
+      if (!run.length) return;
+      const div = document.createElement("div");
+      run.forEach((n) => div.appendChild(n));
+      root.insertBefore(div, before);
+      run = [];
+    };
+    let child = root.firstChild;
+    while (child) {
+      const next = child.nextSibling;
+      if (isBlockNode(child)) flush(child);
+      else run.push(child);
+      child = next;
+    }
+    flush(null);
+  };
+
+  const hasLooseContent = () => {
+    const root = contentRef.current;
+    if (!root) return false;
+    return Array.from(root.childNodes).some(
+      (n) =>
+        (n.nodeType === 3 && n.nodeValue.replace(/\u200B/g, "").trim() !== "") ||
+        (n.nodeType === 1 && !isBlockNode(n) && n.tagName !== "BR")
+    );
+  };
+
+  const normalizeWithCaret = () => {
+    if (!hasLooseContent()) return;
+    const off = caretOffset();
+    normalizeRoot();
+    restoreCaret(off);
+  };
+
+  // \u2500\u2500 Undo / redo \u2500\u2500
+  const snapshot = () => ({
+    html: contentRef.current ? contentRef.current.innerHTML : "",
+    caret: caretOffset(),
+  });
+
+  const resetHistory = () => {
+    histRef.current = { stack: [snapshot()], idx: 0 };
+  };
+
+  const recordHistory = () => {
+    const h = histRef.current;
+    const snap = snapshot();
+    if (h.idx >= 0 && h.stack[h.idx] && h.stack[h.idx].html === snap.html) {
+      h.stack[h.idx].caret = snap.caret;
+      return;
+    }
+    h.stack = h.stack.slice(0, h.idx + 1);
+    h.stack.push(snap);
+    if (h.stack.length > 120) h.stack.shift();
+    h.idx = h.stack.length - 1;
+  };
+
+  const persistCurrent = () => {
+    if (!note || !contentRef.current) return;
+    const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
+    const content = contentRef.current.innerHTML.replace(/\u200B/g, "");
+    onUpdate(note.id, { title, content });
+  };
+
+  const applySnapshot = (snap) => {
+    if (!snap || !contentRef.current) return;
+    contentRef.current.innerHTML = snap.html;
+    injectTodoHandles(contentRef.current);
+    contentRef.current.focus();
+    restoreCaret(snap.caret);
+    persistCurrent();
+    refreshMarks();
+  };
+
+  const undo = () => {
+    recordHistory(); // capture the latest typing before stepping back
+    const h = histRef.current;
+    if (h.idx > 0) {
+      h.idx -= 1;
+      applySnapshot(h.stack[h.idx]);
+    }
+  };
+
+  const redo = () => {
+    const h = histRef.current;
+    if (h.idx < h.stack.length - 1) {
+      h.idx += 1;
+      applySnapshot(h.stack[h.idx]);
+    }
+  };
 
   const fmt = (cmd, value) => {
     document.execCommand(cmd, false, value || undefined);
@@ -897,9 +1044,12 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
 
   const handleContentKeyDown = (e) => {
     if (e.ctrlKey || e.metaKey) {
-      if (e.key === "b") { e.preventDefault(); fmt("bold"); }
-      if (e.key === "i") { e.preventDefault(); fmt("italic"); }
-      if (e.key === "u") { e.preventDefault(); fmt("underline"); }
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); redo(); return; }
+      if (k === "b") { e.preventDefault(); fmt("bold"); }
+      if (k === "i") { e.preventDefault(); fmt("italic"); }
+      if (k === "u") { e.preventDefault(); fmt("underline"); }
       return;
     }
     if (e.key === " ") {
