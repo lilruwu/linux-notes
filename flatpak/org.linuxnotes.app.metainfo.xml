@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.linuxnotes.app</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Linux Notes</name>
+  <summary>Open-source notes for Linux</summary>
+  <description>
+    <p>
+      A warm, paper-inspired open-source alternative to Apple Notes, built with
+      Tauri and React and backed by SQLite. Rich text, tags, images, sketches,
+      to-do lists, tables, a 30-day trash and theming.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.linuxnotes.app.desktop</launchable>
+  <url type="homepage">https://github.com/lilruwu/linux-notes</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.2.0" date="2026-06-08" />
+  </releases>
+</component>

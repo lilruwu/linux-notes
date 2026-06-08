@@ -64,7 +64,47 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Linux Notes ${{ github.ref_name }}"
-          releaseBody: "Descarga el `.deb` (instalable con `dpkg -i`) o el `.AppImage` (ejecutable directo) de los Assets de abajo."
+          releaseBody: "Descarga el `.deb` (Debian/Ubuntu), `.rpm` (Fedora), `.AppImage` (ejecutable directo) o `.flatpak` de los Assets de abajo."
           releaseDraft: true
           prerelease: false
-          args: --bundles deb,appimage
+          args: --bundles deb,rpm,appimage
+
+  # ── Flatpak (built from the .deb, installed into the GNOME 46 runtime) ──
+  flatpak:
+    needs: release
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
+      - name: Add Flathub + install the GNOME runtime
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.gnome.Platform//46 org.gnome.Sdk//46
+
+      - name: Fetch the .deb from this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/deb
+          gh release download "${GITHUB_REF_NAME}" -p "*amd64.deb" --dir /tmp/deb
+          cp /tmp/deb/*.deb flatpak/linux-notes.deb
+
+      - name: Build the Flatpak bundle
+        run: |
+          flatpak-builder --user --force-clean --disable-cache --disable-rofiles-fuse --repo flatpak-repo flatpak-build flatpak/org.linuxnotes.app.yml
+          flatpak build-bundle flatpak-repo "linux-notes_${GITHUB_REF_NAME}.flatpak" org.linuxnotes.app \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Attach the .flatpak to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" "linux-notes_${GITHUB_REF_NAME}.flatpak" --clobber

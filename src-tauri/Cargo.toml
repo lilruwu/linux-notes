@@ -3,6 +3,7 @@ name = "linux-notes"
 version = "0.1.0"
 description = "Linux Notes — an open-source Apple Notes alternative for Linux"
 authors = ["Linux Notes"]
+license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.77.2"
 

@@ -2,3 +2,10 @@ node_modules
 dist
 src-tauri/target
 src-tauri/gen
+
+# Flatpak build artifacts
+flatpak/linux-notes.deb
+flatpak-build/
+flatpak-repo/
+.flatpak-builder/
+*.flatpak
