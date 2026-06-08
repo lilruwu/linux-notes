@@ -3,6 +3,7 @@ import React from "react";
 import { formatDate, colorOf, TAG_PALETTE, trashDaysLeft } from "./data.js";
 import { Modal } from "./ui.jsx";
 import { readClipboardImageDataUrl } from "./clipboard.js";
+import { DrawModal } from "./draw.jsx";
 
 // ── ICONS ──────────────────────────────────────────────
 
@@ -140,6 +141,15 @@ function IcTable() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
       <rect x="2" y="3" width="12" height="10" rx="1.3" stroke="currentColor" strokeWidth="1.3" />
       <path d="M2 6.5h12M2 9.8h12M6.5 3v10" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function IcPencil() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M11.1 2.6l2.3 2.3-7.4 7.4-2.8.5.5-2.8 7.4-7.4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M10 3.7l2.3 2.3" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }
@@ -416,6 +426,12 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
   // In-note find state
   const [find, setFind] = React.useState({ open: false, query: "", count: 0, index: 0 });
   const findRanges = React.useRef([]);
+
+  // Drawing modal
+  const [drawOpen, setDrawOpen] = React.useState(false);
+  const [drawInitial, setDrawInitial] = React.useState(null); // PNG when re-editing
+  const drawRangeRef = React.useRef(null);
+  const editingImgRef = React.useRef(null); // the sketch <img> being re-edited
 
   // Undo/redo history (snapshot-based, since we mutate the DOM directly)
   const histRef = React.useRef({ stack: [], idx: -1 });
@@ -835,6 +851,12 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
 
   // Toggle a checkbox when its circle is clicked (event delegation).
   const handleContentClick = (e) => {
+    // Single click on a sketch reopens it for editing.
+    const sketch = e.target.closest && e.target.closest('img[data-sketch="1"]');
+    if (sketch && contentRef.current.contains(sketch)) {
+      openDrawEdit(sketch);
+      return;
+    }
     const check = e.target.closest && e.target.closest(".todo-check");
     if (check && contentRef.current.contains(check)) {
       const todo = check.closest(".todo");
@@ -1044,6 +1066,61 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     const file = e.target.files && e.target.files[0];
     if (file) embedImageFile(file);
     e.target.value = "";
+  };
+
+  // ── Drawing ──
+  const openDraw = () => {
+    const sel = window.getSelection();
+    drawRangeRef.current =
+      sel && sel.rangeCount && contentRef.current && contentRef.current.contains(sel.anchorNode)
+        ? sel.getRangeAt(0).cloneRange()
+        : null;
+    editingImgRef.current = null;
+    setDrawInitial(null);
+    setDrawOpen(true);
+  };
+
+  // Re-open an existing sketch to keep drawing on it.
+  const openDrawEdit = (img) => {
+    editingImgRef.current = img;
+    drawRangeRef.current = null;
+    setDrawInitial(img.src);
+    setDrawOpen(true);
+  };
+
+
+  const handleDrawSave = (dataUrl) => {
+    setDrawOpen(false);
+    if (editingImgRef.current) {
+      // Re-edit: just swap the existing sketch's pixels.
+      editingImgRef.current.src = dataUrl;
+      editingImgRef.current = null;
+      scheduleSave();
+      return;
+    }
+    contentRef.current.focus();
+    const sel = window.getSelection();
+    if (drawRangeRef.current) {
+      sel.removeAllRanges();
+      sel.addRange(drawRangeRef.current);
+    }
+    const img = document.createElement("img");
+    img.src = dataUrl;
+    img.className = "sketch";
+    img.setAttribute("data-sketch", "1");
+    img.title = "Clic para editar el dibujo";
+    const range = sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (range) {
+      range.collapse(false);
+      range.insertNode(img);
+      range.setStartAfter(img);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      contentRef.current.appendChild(img);
+    }
+    scheduleSave();
   };
 
   const handlePaste = async (e) => {
@@ -1496,6 +1573,9 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
         <button className="toolbar-btn icon" onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Insertar imagen">
           <IcImage />
         </button>
+        <button className="toolbar-btn icon" onMouseDown={(e) => e.preventDefault()} onClick={openDraw} title="Dibujar">
+          <IcPencil />
+        </button>
         <button className={`toolbar-btn icon${marks.inTable ? " active" : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => insertTable(2, 2)} title="Insertar tabla">
           <IcTable />
         </button>
@@ -1654,6 +1734,8 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
         style={{ display: "none" }}
         onChange={handleFileChange}
       />
+
+      <DrawModal open={drawOpen} onClose={() => setDrawOpen(false)} onSave={handleDrawSave} initialImage={drawInitial} />
     </div>
   );
 }

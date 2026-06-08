@@ -10,6 +10,10 @@ prototype; the Rust backend stores notes in a local **SQLite** database.
 - **Images** inside notes — toolbar button, paste (Ctrl+V, incl. screenshots via
   the system clipboard), or drag & drop. Images are downscaled (max 1600 px) and
   embedded in the note, so everything stays in the DB.
+- **Sketches** — a drawing canvas (pen colours/sizes, eraser, undo, clear) whose
+  result is embedded as an image in the note, Apple-Notes style.
+- **Tables** — insert/edit tables with in-table +/− handles to add/remove rows &
+  columns, column alignment, and position-preserving cell copy/paste.
 - **To-do checklists** — toolbar button; click the circle to tick items off.
   Enter continues the list, Enter on an empty item exits it. **Drag the ⠿ handle
   to reorder** items.
