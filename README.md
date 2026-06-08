@@ -77,8 +77,13 @@ npm run tauri dev      # launches the app with hot-reload
 
 ```bash
 cd desktop
-npm run tauri build    # produces .deb / .AppImage / .rpm in src-tauri/target/release/bundle
+npm run tauri build -- --bundles deb,rpm,appimage   # in src-tauri/target/release/bundle
 ```
+
+- **`.deb`** — Debian/Ubuntu (`sudo dpkg -i`).
+- **`.rpm`** — Fedora/openSUSE (`sudo dnf install ./*.rpm`). Tauri builds it with a
+  pure-Rust packer, so no `rpmbuild` is required.
+- **`.AppImage`** — distro-agnostic, just `chmod +x` and run.
 
 Verify the `.deb` is well-formed before installing:
 
@@ -87,10 +92,40 @@ ar t "src-tauri/target/release/bundle/deb/Linux Notes_0.1.0_amd64.deb"
 # should print: debian-binary / control.tar.gz / data.tar.gz
 ```
 
+### Flatpak
+
+The Flatpak installs the built `.deb` into the **GNOME 46 runtime** (which provides
+`webkit2gtk-4.1`). Manifest + metainfo live in `flatpak/`.
+
+> **glibc caveat:** the `.deb` binary must be built against a glibc **≤** the
+> runtime's (GNOME 46 ≈ glibc 2.38). **Ubuntu 22.04 (glibc 2.35)** works — which is
+> why CI builds there. If you build the `.deb` on a newer distro (e.g. Ubuntu 24.04,
+> glibc 2.39) the Flatpak will build but fail at launch with
+> `GLIBC_2.39 not found`. In that case build the `.deb` in a 22.04 container, or just
+> let the **release workflow** produce the `.flatpak`.
+
+To build locally (on Ubuntu 22.04, or adjust per the caveat above):
+
+```bash
+sudo apt install flatpak flatpak-builder      # or your distro's equivalent
+flatpak install flathub org.gnome.Platform//46 org.gnome.Sdk//46
+
+cd desktop
+npm run tauri build -- --bundles deb
+cp "src-tauri/target/release/bundle/deb/"*amd64.deb flatpak/linux-notes.deb
+
+flatpak-builder --user --force-clean --repo flatpak-repo flatpak-build flatpak/org.linuxnotes.app.yml
+flatpak build-bundle flatpak-repo linux-notes.flatpak org.linuxnotes.app \
+  --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+# install & run:
+flatpak install --user linux-notes.flatpak && flatpak run org.linuxnotes.app
+```
+
 ## Automated releases (GitHub Actions)
 
-`.github/workflows/release.yml` builds the `.deb` and `.AppImage` in the cloud and
-publishes a **GitHub Release** whenever you push a version tag. The app version in
+`.github/workflows/release.yml` builds the `.deb`, `.rpm`, `.AppImage` and a
+`.flatpak` in the cloud and publishes a **GitHub Release** whenever you push a
+version tag (the Flatpak runs as a second job that reuses the `.deb`). The app version in
 `package.json`, `Cargo.toml` and `tauri.conf.json` is synced from the tag
 automatically, so all you do is:
 
