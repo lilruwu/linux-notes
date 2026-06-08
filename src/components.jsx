@@ -135,6 +135,37 @@ function IcSearch() {
   );
 }
 
+function IcTable() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <rect x="2" y="3" width="12" height="10" rx="1.3" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M2 6.5h12M2 9.8h12M6.5 3v10" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function IcAlignLeft() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2.5 4h11M2.5 7.3h7M2.5 10.6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IcAlignCenter() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2.5 4h11M4.5 7.3h7M3.5 10.6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+function IcAlignRight() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <path d="M2.5 4h11M6.5 7.3h7M4.5 10.6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IcSettings() {
   return (
     <svg className="nav-icon" viewBox="0 0 16 16" fill="none">
@@ -648,6 +679,32 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
 
   // ── Active toolbar state ──
   const [marks, setMarks] = React.useState({});
+  // Geometry of the active table + its rows/cols, in editor-body content coords.
+  const [tableBox, setTableBox] = React.useState(null);
+  const tableElRef = React.useRef(null);
+
+  const measureTable = (table) => {
+    if (!table) return setTableBox(null);
+    const eb = table.closest(".editor-body");
+    if (!eb) return setTableBox(null);
+    const ebr = eb.getBoundingClientRect();
+    const toX = (vx) => vx - ebr.left + eb.scrollLeft;
+    const toY = (vy) => vy - ebr.top + eb.scrollTop;
+    const tr0 = table.rows[0];
+    const cols = tr0
+      ? Array.from(tr0.cells).map((td) => {
+          const r = td.getBoundingClientRect();
+          return { left: toX(r.left), width: r.width };
+        })
+      : [];
+    const rows = Array.from(table.rows).map((tr) => {
+      const r = tr.getBoundingClientRect();
+      return { top: toY(r.top), height: r.height };
+    });
+    const tr = table.getBoundingClientRect();
+    setTableBox({ top: toY(tr.top), left: toX(tr.left), w: tr.width, h: tr.height, cols, rows });
+  };
+
   const refreshMarks = React.useCallback(() => {
     const el = contentRef.current;
     const sel = window.getSelection();
@@ -655,9 +712,12 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     let node = sel.anchorNode;
     if (node.nodeType === 3) node = node.parentElement;
     const blockEl = node && node.closest ? node.closest("h1,h2,h3,pre,blockquote") : null;
+    const tableEl = node && node.closest ? node.closest("table") : null;
     const q = (c) => {
       try { return document.queryCommandState(c); } catch { return false; }
     };
+    tableElRef.current = tableEl && el.contains(tableEl) ? tableEl : null;
+    measureTable(tableElRef.current);
     setMarks({
       bold: q("bold"),
       italic: q("italic"),
@@ -665,6 +725,7 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       ul: q("insertUnorderedList"),
       ol: q("insertOrderedList"),
       block: blockEl ? blockEl.tagName.toLowerCase() : "",
+      inTable: !!tableElRef.current,
     });
   }, []);
 
@@ -783,6 +844,169 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     }
   };
 
+  // ── Tables ──
+  const makeCell = () => {
+    const td = document.createElement("td");
+    td.appendChild(document.createElement("br"));
+    return td;
+  };
+
+  const currentCell = () => closestInContent("td") || closestInContent("th");
+
+  const insertTable = (rows = 2, cols = 2) => {
+    contentRef.current.focus();
+    const table = document.createElement("table");
+    table.className = "note-table";
+    const tbody = document.createElement("tbody");
+    for (let r = 0; r < rows; r++) {
+      const tr = document.createElement("tr");
+      for (let c = 0; c < cols; c++) tr.appendChild(makeCell());
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+
+    const block = currentBlockEl();
+    if (block && block.parentNode) block.after(table);
+    else {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) sel.getRangeAt(0).insertNode(table);
+      else contentRef.current.appendChild(table);
+    }
+    // a normal line after the table so the caret can escape below it
+    const after = document.createElement("div");
+    after.appendChild(document.createElement("br"));
+    table.after(after);
+
+    placeCaretStart(table.querySelector("td"));
+    scheduleSave();
+    refreshMarks();
+  };
+
+  // Add a row below the caret's row (used by Tab past the last cell).
+  const addRow = () => {
+    const td = currentCell();
+    if (!td) return;
+    const tr = td.parentNode;
+    const ntr = document.createElement("tr");
+    for (let i = 0; i < tr.children.length; i++) ntr.appendChild(makeCell());
+    tr.after(ntr);
+    placeCaretStart(ntr.children[0]);
+    scheduleSave();
+    measureTable(td.closest("table"));
+  };
+
+  // Append a row/column at the end (used by the in-table "+" handles).
+  const addRowEnd = () => {
+    const table = tableElRef.current;
+    if (!table) return;
+    const cols = table.querySelector("tr") ? table.querySelector("tr").children.length : 2;
+    const tr = document.createElement("tr");
+    for (let i = 0; i < cols; i++) tr.appendChild(makeCell());
+    (table.querySelector("tbody") || table).appendChild(tr);
+    scheduleSave();
+    measureTable(table);
+  };
+
+  const addColumnEnd = () => {
+    const table = tableElRef.current;
+    if (!table) return;
+    table.querySelectorAll("tr").forEach((tr) => tr.appendChild(makeCell()));
+    scheduleSave();
+    measureTable(table);
+  };
+
+  // ── Per-row / per-column actions (driven by the in-table handles) ──
+  const deleteRowAt = (i) => {
+    const table = tableElRef.current;
+    if (!table || !table.rows[i]) return;
+    if (table.rows.length <= 1) return deleteTable();
+    table.deleteRow(i);
+    scheduleSave();
+    measureTable(table);
+  };
+
+  const deleteColumnAt = (i) => {
+    const table = tableElRef.current;
+    if (!table) return;
+    const colCount = table.rows[0] ? table.rows[0].cells.length : 0;
+    if (colCount <= 1) return deleteTable();
+    Array.from(table.rows).forEach((tr) => tr.cells[i] && tr.deleteCell(i));
+    scheduleSave();
+    measureTable(table);
+  };
+
+
+  // Align the whole column the caret is in (Obsidian-style column alignment).
+  const setColumnAlign = (align) => {
+    const td = currentCell();
+    if (!td) return;
+    const idx = Array.from(td.parentNode.children).indexOf(td);
+    td.closest("table").querySelectorAll("tr").forEach((tr) => {
+      if (tr.children[idx]) tr.children[idx].style.textAlign = align;
+    });
+    scheduleSave();
+  };
+
+  const deleteTable = () => {
+    const table = tableElRef.current || closestInContent("table");
+    if (!table) return;
+    const sib = table.nextElementSibling || table.previousElementSibling;
+    table.remove();
+    tableElRef.current = null;
+    setTableBox(null);
+    if (sib) placeCaretStart(sib);
+    scheduleSave();
+    refreshMarks();
+  };
+
+  // ── Paste tabular data into a table, preserving cell positions ──
+  const parseGridFromText = (text) =>
+    text
+      .replace(/\r/g, "")
+      .replace(/\n+$/, "")
+      .split("\n")
+      .map((line) => line.split("\t"));
+
+  const parseGridFromHtml = (html) => {
+    try {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const table = doc.querySelector("table");
+      if (!table) return null;
+      return Array.from(table.rows).map((tr) => Array.from(tr.cells).map((td) => td.textContent));
+    } catch {
+      return null;
+    }
+  };
+
+  const pasteGridIntoTable = (grid, targetCell) => {
+    const table = targetCell.closest("table");
+    const startRow = targetCell.parentNode.rowIndex;
+    const startCol = targetCell.cellIndex;
+    const needCols = startCol + Math.max(...grid.map((r) => r.length));
+    const needRows = startRow + grid.length;
+    // grow columns / rows so the pasted block fits
+    while (table.rows[0].cells.length < needCols) {
+      Array.from(table.rows).forEach((r) => r.insertCell(-1).appendChild(document.createElement("br")));
+    }
+    while (table.rows.length < needRows) {
+      const tr = table.insertRow(-1);
+      for (let c = 0; c < needCols; c++) tr.insertCell(-1).appendChild(document.createElement("br"));
+    }
+    // fill, preserving relative positions
+    for (let i = 0; i < grid.length; i++) {
+      const tr = table.rows[startRow + i];
+      for (let j = 0; j < grid[i].length; j++) {
+        const cell = tr.cells[startCol + j];
+        if (!cell) continue;
+        cell.textContent = grid[i][j];
+        if (!cell.firstChild) cell.appendChild(document.createElement("br"));
+      }
+    }
+    placeCaretStart(targetCell);
+    scheduleSave();
+    measureTable(table);
+  };
+
   // ── Images ──
   // Insert an image (given as a data URL), downscaling if it's large.
   const insertDataUrl = (dataUrl, preferJpeg = false) =>
@@ -836,6 +1060,26 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           if (f) embedImageFile(f);
           return;
         }
+      }
+      // Tabular clipboard (selected cells / spreadsheet). Inside a table we
+      // distribute the values across cells preserving their positions; outside
+      // we flatten to text so no nested table is dropped in.
+      const html = dt.getData ? dt.getData("text/html") : "";
+      const plain = dt.getData ? dt.getData("text/plain") || "" : "";
+      const isTabular = (html && /<table[\s>]/i.test(html)) || plain.includes("\t");
+      if (isTabular) {
+        e.preventDefault();
+        let grid = html && /<table[\s>]/i.test(html) ? parseGridFromHtml(html) : null;
+        if (!grid) grid = parseGridFromText(plain);
+        const cell = currentCell();
+        if (cell && grid && (grid.length > 1 || (grid[0] && grid[0].length > 1))) {
+          pasteGridIntoTable(grid, cell);
+        } else {
+          contentRef.current.focus();
+          document.execCommand("insertText", false, grid ? grid.map((r) => r.join("\t")).join("\n") : plain);
+          scheduleSave();
+        }
+        return;
       }
       // Real text on the clipboard → let the webview paste it (keeps formatting).
       const types = dt.types ? [...dt.types] : [];
@@ -1073,6 +1317,37 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       if (k === "u") { e.preventDefault(); fmt("underline"); }
       return;
     }
+    // Tab moves between table cells (and adds a row past the last cell).
+    if (e.key === "Tab") {
+      const td = currentCell();
+      if (td) {
+        e.preventDefault();
+        const cells = Array.from(td.closest("table").querySelectorAll("td"));
+        const i = cells.indexOf(td);
+        if (e.shiftKey) {
+          if (i > 0) placeCaretStart(cells[i - 1]);
+        } else if (i < cells.length - 1) {
+          placeCaretStart(cells[i + 1]);
+        } else {
+          addRow(); // adds a row and focuses its first cell
+        }
+        return;
+      }
+    }
+    // Backspace at the start of a table cell: never let WebKit merge across
+    // cells (it deletes far too much). An all-empty table is removed instead.
+    if (e.key === "Backspace") {
+      const cell = currentCell();
+      if (cell && caretAtStartOf(cell)) {
+        e.preventDefault();
+        const table = cell.closest("table");
+        const allEmpty = Array.from(table.querySelectorAll("td")).every(
+          (td) => td.textContent.replace(/\u200B/g, "").trim() === ""
+        );
+        if (allEmpty) deleteTable();
+        return;
+      }
+    }
     // Backspace near a to-do's contenteditable=false parts (checkbox / drag
     // handle) makes WebKitGTK delete way too much. Handle these boundaries
     // ourselves instead of letting the browser do it.
@@ -1221,9 +1496,23 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
         <button className="toolbar-btn icon" onClick={() => fileInputRef.current && fileInputRef.current.click()} title="Insertar imagen">
           <IcImage />
         </button>
+        <button className={`toolbar-btn icon${marks.inTable ? " active" : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => insertTable(2, 2)} title="Insertar tabla">
+          <IcTable />
+        </button>
         <button className={`toolbar-btn${marks.block === "pre" ? " active" : ""}`} onClick={() => toggleBlock("pre")} title="Bloque de código" style={{ fontFamily: "monospace", letterSpacing: "0.03em" }}>
           {"</>"}
         </button>
+
+        {marks.inTable && (
+          <>
+            <div className="toolbar-sep" />
+            <button className="toolbar-btn icon" onMouseDown={(e) => e.preventDefault()} onClick={() => setColumnAlign("left")} title="Alinear columna a la izquierda"><IcAlignLeft /></button>
+            <button className="toolbar-btn icon" onMouseDown={(e) => e.preventDefault()} onClick={() => setColumnAlign("center")} title="Centrar columna"><IcAlignCenter /></button>
+            <button className="toolbar-btn icon" onMouseDown={(e) => e.preventDefault()} onClick={() => setColumnAlign("right")} title="Alinear columna a la derecha"><IcAlignRight /></button>
+            <div className="toolbar-sep" />
+            <button className="toolbar-btn tbl-del" onMouseDown={(e) => e.preventDefault()} onClick={deleteTable} title="Eliminar la tabla entera">Borrar tabla</button>
+          </>
+        )}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: "2px", alignItems: "center" }}>
           <button
@@ -1296,7 +1585,7 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           onKeyUp={refreshMarks}
           onMouseUp={refreshMarks}
           onFocus={refreshMarks}
-          onBlur={() => setMarks({})}
+          onBlur={() => { setMarks({}); setTableBox(null); }}
           onClick={handleContentClick}
           onPaste={handlePaste}
           onDrop={handleDrop}
@@ -1305,6 +1594,57 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           onDragOver={(e) => e.preventDefault()}
           data-placeholder="Empieza a escribir…"
         />
+
+        {/* In-table "+" handles (Obsidian-style), anchored to the active table */}
+        {tableBox && (
+          <>
+            <button
+              className="tbl-add tbl-add-col"
+              style={{ top: tableBox.top, left: tableBox.left + tableBox.w + 5, height: tableBox.h }}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={addColumnEnd}
+              title="Añadir columna"
+            >
+              +
+            </button>
+            <button
+              className="tbl-add tbl-add-row"
+              style={{ top: tableBox.top + tableBox.h + 5, left: tableBox.left, width: tableBox.w }}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={addRowEnd}
+              title="Añadir fila"
+            >
+              +
+            </button>
+
+            {/* "−" delete a column (above each column) */}
+            {tableBox.cols.map((c, i) => (
+              <button
+                key={"col" + i}
+                className="tbl-handle tbl-handle-col"
+                style={{ left: c.left, top: tableBox.top - 17, width: c.width }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteColumnAt(i)}
+                title="Eliminar columna"
+              >
+                −
+              </button>
+            ))}
+            {/* "−" delete a row (left of each row) */}
+            {tableBox.rows.map((r, i) => (
+              <button
+                key={"row" + i}
+                className="tbl-handle tbl-handle-row"
+                style={{ top: r.top, left: tableBox.left - 17, height: r.height }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteRowAt(i)}
+                title="Eliminar fila"
+              >
+                −
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
       <input
