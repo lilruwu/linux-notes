@@ -52,6 +52,7 @@ export function SettingsModal({ open, onClose, settings, onChange, onExport, onI
           options={[
             { value: "light", label: "Claro" },
             { value: "dark", label: "Oscuro" },
+            { value: "auto", label: "Automático" },
           ]}
           onChange={(v) => onChange("theme", v)}
         />

@@ -73,6 +73,19 @@ function drawNotepad(ctx, S, accent) {
   ctx.stroke();
 }
 
+// Sync the native window (and its titlebar decorations) to the active mode.
+// `theme` is "light" | "dark" to force it, or null to follow the system theme
+// (used by the "Automático" mode). Best-effort: a no-op outside the Tauri
+// runtime, and on desktops/platforms that don't honour the request.
+export async function applyWindowTheme(theme) {
+  if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) return;
+  try {
+    await getCurrentWindow().setTheme(theme || null);
+  } catch (e) {
+    console.debug("native window theme sync skipped:", e);
+  }
+}
+
 let lastAccent = null;
 
 export async function applyThemedIcon() {

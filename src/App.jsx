@@ -3,20 +3,37 @@ import React from "react";
 import { Sidebar, NoteListPanel, Editor, NewTagModal } from "./components.jsx";
 import { useSettings, SettingsModal } from "./settings.jsx";
 import { ConfirmModal } from "./ui.jsx";
-import { applyThemedIcon } from "./appicon.js";
+import { applyThemedIcon, applyWindowTheme } from "./appicon.js";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api.js";
 
 export default function App() {
   // ── Appearance settings ──
-  const [settings, setSetting] = useSettings({ variant: "paper", theme: "light", fontSize: 15 });
+  // Default mode is "auto" so a fresh install follows the system light/dark.
+  const [settings, setSetting] = useSettings({ variant: "paper", theme: "auto", fontSize: 15 });
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   React.useEffect(() => {
-    document.documentElement.className = `v-${settings.variant} t-${settings.theme}`;
-    document.documentElement.style.setProperty("--font-size", settings.fontSize + "px");
-    // Retint the window icon to match the active theme accent (best-effort).
-    applyThemedIcon();
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    // Resolve "auto" to the live system preference; "light"/"dark" pass through.
+    const resolved = () =>
+      settings.theme === "auto" ? (mq.matches ? "dark" : "light") : settings.theme;
+    const apply = () => {
+      const t = resolved();
+      document.documentElement.className = `v-${settings.variant} t-${t}`;
+      document.documentElement.style.setProperty("--font-size", settings.fontSize + "px");
+      // Retint the window icon to match the active theme accent (best-effort).
+      applyThemedIcon();
+      // Keep the native window/titlebar in step: follow the system in "auto",
+      // otherwise force the chosen mode.
+      applyWindowTheme(settings.theme === "auto" ? null : t);
+    };
+    apply();
+    // Repaint live when the system theme flips while in "auto" mode.
+    if (settings.theme === "auto") {
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
   }, [settings.variant, settings.theme, settings.fontSize]);
 
   // ── Data (source of truth lives in SQLite via the backend) ──
