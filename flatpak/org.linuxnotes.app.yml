@@ -15,6 +15,17 @@ finish-args:
   - --device=dri
   - --share=ipc
   - --share=network # web fonts (Lora) load from the CDN, like the other builds
+  # Read the host's GTK config + theme files so the window decorations
+  # (titlebar) follow the user's system theme. The gtk-3.0/4.0 config tells the
+  # app which theme + light/dark preference to use; the theme directories let it
+  # actually load custom themes (e.g. WhiteSur-Dark) that live in the user's
+  # home and aren't shipped inside the GNOME runtime. Without these the sandbox
+  # only sees the runtime's default Adwaita and the titlebar is stuck light.
+  - --filesystem=xdg-config/gtk-3.0:ro
+  - --filesystem=xdg-config/gtk-4.0:ro
+  - --filesystem=~/.themes:ro
+  - --filesystem=xdg-data/themes:ro
+  - --filesystem=xdg-data/icons:ro
 
 modules:
   - name: linux-notes

@@ -9,102 +9,52 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Paint the themed background straight away (the bootstrap script in index.html
+   sets the theme class before first paint), so there's no white flash on open. */
+html { background: var(--bg); color: var(--fg); }
+
 body { font-family: system-ui, -apple-system, 'Segoe UI', 'Ubuntu', sans-serif; }
 
-/* ── THEME VARIABLES ── */
+/* ── THEME VARIABLES ──
+   Light = pure white, Dark = pure black. The three styles (Papel / Pizarra /
+   Bosque) share the same neutral surfaces and differ only by their accent
+   colour and editor font, so the look is "white + colour" vs "black + colour"
+   rather than a tinted, half-darkened background. */
 
-html.v-paper.t-light {
-  --bg:       #FAFAF5;
-  --bg2:      #F0EBE0;
-  --bg3:      #E5DFD0;
-  --fg:       #2C2820;
-  --fg2:      #7A7060;
-  --fg3:      #AFA898;
-  --accent:   #D98C18;
+html.t-light {
+  --bg:       #FFFFFF;
+  --bg2:      #F4F4F5;
+  --bg3:      #E6E6E8;
+  --fg:       #14141A;
+  --fg2:      #5A5A62;
+  --fg3:      #9C9CA4;
   --accfg:    #FFF;
-  --border:   rgba(0,0,0,0.07);
-  --sel:      rgba(217,140,24,0.13);
+  --border:   rgba(0,0,0,0.09);
   --shadow:   0 1px 4px rgba(0,0,0,0.08);
-  --efont:    'Lora', Georgia, serif;
   color-scheme: light;
 }
-html.v-paper.t-dark {
-  --bg:       #1C1912;
-  --bg2:      #151210;
-  --bg3:      #100E0B;
-  --fg:       #EDE7D8;
-  --fg2:      #8A8070;
-  --fg3:      #5A5248;
-  --accent:   #F0A020;
+html.t-dark {
+  --bg:       #000000;
+  --bg2:      #0C0C0E;
+  --bg3:      #1A1A1D;
+  --fg:       #F2F2F3;
+  --fg2:      #97979F;
+  --fg3:      #58585F;
   --accfg:    #FFF;
-  --border:   rgba(255,255,255,0.07);
-  --sel:      rgba(240,160,32,0.15);
-  --shadow:   0 1px 4px rgba(0,0,0,0.4);
-  --efont:    'Lora', Georgia, serif;
+  --border:   rgba(255,255,255,0.11);
+  --shadow:   0 1px 4px rgba(0,0,0,0.55);
   color-scheme: dark;
 }
 
-html.v-slate.t-light {
-  --bg:       #F8F9FA;
-  --bg2:      #EDEEF1;
-  --bg3:      #E0E2E6;
-  --fg:       #1A1D22;
-  --fg2:      #6B7280;
-  --fg3:      #9BA3AF;
-  --accent:   #2563EB;
-  --accfg:    #FFF;
-  --border:   rgba(0,0,0,0.07);
-  --sel:      rgba(37,99,235,0.11);
-  --shadow:   0 1px 3px rgba(0,0,0,0.06);
-  --efont:    system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color-scheme: light;
-}
-html.v-slate.t-dark {
-  --bg:       #191C21;
-  --bg2:      #13161B;
-  --bg3:      #0F1115;
-  --fg:       #E8EBF0;
-  --fg2:      #8B93A1;
-  --fg3:      #5A6270;
-  --accent:   #4B8EF5;
-  --accfg:    #FFF;
-  --border:   rgba(255,255,255,0.07);
-  --sel:      rgba(75,142,245,0.15);
-  --shadow:   0 1px 4px rgba(0,0,0,0.3);
-  --efont:    system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color-scheme: dark;
-}
+/* Per-style accent + editor font (the only things that change between styles) */
+html.v-paper.t-light  { --accent: #D98C18; --sel: rgba(217,140,24,0.12); --efont: 'Lora', Georgia, serif; }
+html.v-paper.t-dark   { --accent: #F0A020; --sel: rgba(240,160,32,0.18); --efont: 'Lora', Georgia, serif; }
 
-html.v-forest.t-light {
-  --bg:       #F5F8F3;
-  --bg2:      #EBF0E6;
-  --bg3:      #DBE5D3;
-  --fg:       #1E2A1A;
-  --fg2:      #607860;
-  --fg3:      #96A890;
-  --accent:   #4A8A52;
-  --accfg:    #FFF;
-  --border:   rgba(0,0,0,0.07);
-  --sel:      rgba(74,138,82,0.12);
-  --shadow:   0 1px 3px rgba(0,0,0,0.07);
-  --efont:    'Lora', Georgia, serif;
-  color-scheme: light;
-}
-html.v-forest.t-dark {
-  --bg:       #141C12;
-  --bg2:      #0F160D;
-  --bg3:      #0B1109;
-  --fg:       #DDE8D8;
-  --fg2:      #7A9A72;
-  --fg3:      #4A6445;
-  --accent:   #6AAD72;
-  --accfg:    #FFF;
-  --border:   rgba(255,255,255,0.07);
-  --sel:      rgba(106,173,114,0.15);
-  --shadow:   0 1px 4px rgba(0,0,0,0.35);
-  --efont:    'Lora', Georgia, serif;
-  color-scheme: dark;
-}
+html.v-slate.t-light  { --accent: #2563EB; --sel: rgba(37,99,235,0.10);  --efont: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+html.v-slate.t-dark   { --accent: #4B8EF5; --sel: rgba(75,142,245,0.18);  --efont: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+
+html.v-forest.t-light { --accent: #4A8A52; --sel: rgba(74,138,82,0.12);  --efont: 'Lora', Georgia, serif; }
+html.v-forest.t-dark  { --accent: #6AAD72; --sel: rgba(106,173,114,0.18); --efont: 'Lora', Georgia, serif; }
 
 /* ── ROOT ── */
 :root {

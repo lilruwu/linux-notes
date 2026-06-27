@@ -9,6 +9,32 @@
       href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap"
       rel="stylesheet"
     />
+    <!--
+      Apply the saved appearance before the first paint so the app opens in its
+      real theme instead of flashing the default light one while React boots.
+      Mirrors the resolution logic in App.jsx (incl. "auto" → system preference).
+    -->
+    <script>
+      (function () {
+        try {
+          var d = document.documentElement;
+          var s = JSON.parse(localStorage.getItem("linux-notes-settings") || "{}");
+          var variant = s.variant || "paper";
+          var theme = s.theme || "auto";
+          if (theme === "auto") {
+            theme =
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          }
+          d.className = "v-" + variant + " t-" + theme;
+          if (s.fontSize) d.style.setProperty("--font-size", s.fontSize + "px");
+        } catch (e) {
+          /* fall back to the class hard-coded on <html> */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
