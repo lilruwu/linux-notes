@@ -29,6 +29,23 @@ pub struct Note {
     pub deleted_at: Option<String>,
 }
 
+/// Lightweight listing row: everything the note list and search need, but not
+/// the HTML `content` (which may embed base64 images and dwarf the rest).
+/// `search_text` is the plain-text shadow of the content, kept by the DB layer.
+#[derive(Debug, Clone, Serialize)]
+pub struct NoteSummary {
+    pub id: String,
+    pub title: String,
+    pub folder: String,
+    pub favorite: bool,
+    pub created: String,
+    pub updated: String,
+    #[serde(rename = "deletedAt")]
+    pub deleted_at: Option<String>,
+    #[serde(rename = "searchText")]
+    pub search_text: String,
+}
+
 /// A tag/folder a note can belong to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
@@ -90,9 +107,18 @@ fn generate_id() -> String {
 // ── Commands ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn list_notes(state: tauri::State<'_, AppState>) -> Result<Vec<Note>, String> {
+fn list_notes(state: tauri::State<'_, AppState>) -> Result<Vec<NoteSummary>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::list_notes(&conn).map_err(|e| e.to_string())
+}
+
+/// Full note (including content) — fetched lazily when a note is opened.
+#[tauri::command]
+fn get_note(id: String, state: tauri::State<'_, AppState>) -> Result<Note, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::get_note(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Note {id} not found"))
 }
 
 #[tauri::command]
@@ -119,32 +145,35 @@ fn update_note(
     title: String,
     content: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Note, String> {
+) -> Result<NoteSummary, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::update_note(&conn, &id, &title, &content, &today_iso()).map_err(|e| e.to_string())?;
-    db::get_note(&conn, &id)
+    db::get_summary(&conn, &id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Note {id} not found"))
 }
 
 /// Move a note to the trash (recoverable for `TRASH_RETENTION_DAYS`).
 #[tauri::command]
-fn delete_note(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+fn delete_note(id: String, state: tauri::State<'_, AppState>) -> Result<NoteSummary, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::trash_note(&conn, &id, &today_iso()).map_err(|e| e.to_string())
+    db::trash_note(&conn, &id, &today_iso()).map_err(|e| e.to_string())?;
+    db::get_summary(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Note {id} not found"))
 }
 
 #[tauri::command]
-fn list_trash(state: tauri::State<'_, AppState>) -> Result<Vec<Note>, String> {
+fn list_trash(state: tauri::State<'_, AppState>) -> Result<Vec<NoteSummary>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::list_trash(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn restore_note(id: String, state: tauri::State<'_, AppState>) -> Result<Note, String> {
+fn restore_note(id: String, state: tauri::State<'_, AppState>) -> Result<NoteSummary, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::restore_note(&conn, &id).map_err(|e| e.to_string())?;
-    db::get_note(&conn, &id)
+    db::get_summary(&conn, &id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Note {id} not found"))
 }
@@ -223,10 +252,10 @@ fn set_note_folder(
     id: String,
     folder: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Note, String> {
+) -> Result<NoteSummary, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::update_note_folder(&conn, &id, &folder, &today_iso()).map_err(|e| e.to_string())?;
-    db::get_note(&conn, &id)
+    db::get_summary(&conn, &id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Note {id} not found"))
 }
@@ -296,6 +325,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_notes,
+            get_note,
             create_note,
             update_note,
             delete_note,

@@ -3,8 +3,15 @@
 import { invoke } from "@tauri-apps/api/core";
 
 // ── Notes ──
+// Returns lightweight summaries (no content): id, title, folder, favorite,
+// created, updated, deletedAt, searchText.
 export function listNotes() {
   return invoke("list_notes");
+}
+
+// Full note, content included — fetched lazily when a note is opened.
+export function getNote(id) {
+  return invoke("get_note", { id });
 }
 
 export function createNote(folder) {

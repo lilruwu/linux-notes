@@ -202,14 +202,12 @@ function NavItem({ icon, label, count, selected, onClick }) {
   );
 }
 
-export function Sidebar({ notes, folders, trashCount, selectedFolder, onSelectFolder, onNewTag, onDeleteTag, onOpenSettings }) {
-  const favCount = notes.filter((n) => n.favorite).length;
-
+export const Sidebar = React.memo(function Sidebar({ noteCount, favCount, folderCounts, folders, trashCount, selectedFolder, onSelectFolder, onNewTag, onDeleteTag, onOpenSettings }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-title">Notas</div>
       <nav className="sidebar-nav">
-        <NavItem icon={<IcLines />} label="Todas las notas" count={notes.length} selected={selectedFolder === "all"} onClick={() => onSelectFolder("all")} />
+        <NavItem icon={<IcLines />} label="Todas las notas" count={noteCount} selected={selectedFolder === "all"} onClick={() => onSelectFolder("all")} />
         <NavItem icon={<IcStar />} label="Favoritas" count={favCount} selected={selectedFolder === "favorites"} onClick={() => onSelectFolder("favorites")} />
         <NavItem icon={<IcClock />} label="Recientes" count={null} selected={selectedFolder === "recent"} onClick={() => onSelectFolder("recent")} />
         <NavItem icon={<IcTrashNav />} label="Papelera" count={trashCount || null} selected={selectedFolder === "trash"} onClick={() => onSelectFolder("trash")} />
@@ -230,7 +228,7 @@ export function Sidebar({ notes, folders, trashCount, selectedFolder, onSelectFo
           >
             <TagDot color={f.color} />
             <span className="nav-label">{f.name}</span>
-            <span className="nav-count">{notes.filter((n) => n.folder === f.name).length}</span>
+            <span className="nav-count">{folderCounts[f.name] || 0}</span>
             {folders.length > 1 && (
               <button
                 className="tag-del-btn"
@@ -252,14 +250,16 @@ export function Sidebar({ notes, folders, trashCount, selectedFolder, onSelectFo
       </div>
     </aside>
   );
-}
+});
 
 // ── NOTE LIST ──────────────────────────────────────────
 
-function NoteCard({ note, selected, trashMode, onClick }) {
+// Memoized: after an autosave only the edited note's summary changes identity,
+// so the rest of the list doesn't re-render.
+const NoteCard = React.memo(function NoteCard({ note, selected, trashMode, onSelect }) {
   const days = trashMode ? trashDaysLeft(note.deletedAt) : null;
   return (
-    <div className={`note-card${selected ? " selected" : ""}`} onClick={onClick}>
+    <div className={`note-card${selected ? " selected" : ""}`} onClick={() => onSelect(note.id)}>
       <div className="note-card-title">
         {note.favorite && !trashMode && <span className="note-fav-dot" />}
         {note.title || <span style={{ opacity: 0.38 }}>Sin título</span>}
@@ -269,7 +269,7 @@ function NoteCard({ note, selected, trashMode, onClick }) {
       </div>
     </div>
   );
-}
+});
 
 export function NoteListPanel({ notes, selectedId, trashMode, onSelectNote, onCreateNote, onEmptyTrash, searchQuery, onSearchChange, searchRef }) {
   return (
@@ -304,7 +304,7 @@ export function NoteListPanel({ notes, selectedId, trashMode, onSelectNote, onCr
           </div>
         ) : (
           notes.map((note) => (
-            <NoteCard key={note.id} note={note} selected={note.id === selectedId} trashMode={trashMode} onClick={() => onSelectNote(note.id)} />
+            <NoteCard key={note.id} note={note} selected={note.id === selectedId} trashMode={trashMode} onSelect={onSelectNote} />
           ))
         )}
       </div>
@@ -436,8 +436,49 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
   // Undo/redo history (snapshot-based, since we mutate the DOM directly)
   const histRef = React.useRef({ stack: [], idx: -1 });
 
+  // Save whatever the editor DOM currently holds, attributed to the note it
+  // belongs to (activeId) \u2014 never to the `note` prop, which may already point
+  // at a different note while a debounced save is still pending.
+  const doSave = () => {
+    if (!activeId.current || !contentRef.current) return;
+    normalizeWithCaret(); // keep every line wrapped in a block (structural safety)
+    recordHistory(); // commit an undo snapshot at each pause
+    const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
+    // Strip the zero-width spaces used as empty-block caret anchors.
+    const content = contentRef.current.innerHTML.replace(/\u200B/g, "");
+    onUpdate(activeId.current, { title, content });
+  };
+  const doSaveRef = React.useRef(doSave);
+  doSaveRef.current = doSave;
+
+  // Run a pending debounced save right now. Called before the editor DOM is
+  // replaced with another note, so edits are neither lost nor written under
+  // the wrong note id.
+  const flushSave = () => {
+    if (saveTimer.current == null) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    doSaveRef.current();
+  };
+
+  const scheduleSave = () => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      doSaveRef.current();
+    }, 400);
+  };
+
   React.useEffect(() => {
-    if (!note || note.id === activeId.current) return;
+    if (!note || !contentRef.current) {
+      // The editable DOM is unmounted (no selection / trash view); forget the
+      // active note so selecting it again reloads the content instead of
+      // hitting the same-id guard below with an empty editor.
+      activeId.current = null;
+      return;
+    }
+    if (note.id === activeId.current) return;
+    flushSave(); // persist pending edits of the previous note before swapping the DOM
     activeId.current = note.id;
     if (titleRef.current) titleRef.current.textContent = note.title;
     if (contentRef.current) {
@@ -452,19 +493,6 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
       setTimeout(() => titleRef.current && titleRef.current.focus(), 60);
     }
   }, [note && note.id]);
-
-  const scheduleSave = React.useCallback(() => {
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      if (!note) return;
-      normalizeWithCaret(); // keep every line wrapped in a block (structural safety)
-      recordHistory(); // commit an undo snapshot at each pause
-      const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
-      // Strip the zero-width spaces used as empty-block caret anchors.
-      const content = ((contentRef.current && contentRef.current.innerHTML) || "").replace(/\u200B/g, "");
-      onUpdate(note.id, { title, content });
-    }, 400);
-  }, [note, onUpdate]);
 
   // \u2500\u2500 Caret <-> character offset (for history & normalization) \u2500\u2500
   const caretOffset = () => {
@@ -559,6 +587,11 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     histRef.current = { stack: [snapshot()], idx: 0 };
   };
 
+  // Snapshots hold the full HTML — with embedded base64 images they can be
+  // megabytes each, so the stack is capped by total size, not just entries.
+  const MAX_HIST_ENTRIES = 120;
+  const MAX_HIST_CHARS = 8_000_000; // ≈16 MB of string memory
+
   const recordHistory = () => {
     const h = histRef.current;
     const snap = snapshot();
@@ -568,15 +601,20 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
     }
     h.stack = h.stack.slice(0, h.idx + 1);
     h.stack.push(snap);
-    if (h.stack.length > 120) h.stack.shift();
+    let total = 0;
+    for (const s of h.stack) total += s.html.length;
+    // Always keep the current state plus at least one undo step.
+    while (h.stack.length > 2 && (h.stack.length > MAX_HIST_ENTRIES || total > MAX_HIST_CHARS)) {
+      total -= h.stack.shift().html.length;
+    }
     h.idx = h.stack.length - 1;
   };
 
   const persistCurrent = () => {
-    if (!note || !contentRef.current) return;
+    if (!activeId.current || !contentRef.current) return;
     const title = (titleRef.current && titleRef.current.textContent.trim()) || "";
     const content = contentRef.current.innerHTML.replace(/\u200B/g, "");
-    onUpdate(note.id, { title, content });
+    onUpdate(activeId.current, { title, content });
   };
 
   const applySnapshot = (snap) => {
@@ -1665,7 +1703,7 @@ export function Editor({ note, folders, trashMode, onUpdate, onDelete, onToggleF
           onKeyUp={refreshMarks}
           onMouseUp={refreshMarks}
           onFocus={refreshMarks}
-          onBlur={() => { setMarks({}); setTableBox(null); }}
+          onBlur={() => { flushSave(); setMarks({}); setTableBox(null); }}
           onClick={handleContentClick}
           onPaste={handlePaste}
           onDrop={handleDrop}
