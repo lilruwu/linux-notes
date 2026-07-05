@@ -2,10 +2,13 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Result};
 
-use crate::{Folder, Note};
+use crate::{Folder, Note, NoteSummary};
 
 /// Create tables if they don't exist and apply lightweight migrations.
 pub fn init(conn: &Connection) -> Result<()> {
+    // WAL avoids a full journal fsync on every autosave (one UPDATE every few
+    // hundred ms while typing); NORMAL is the recommended durability pairing.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS notes (
             id         TEXT PRIMARY KEY,
@@ -35,7 +38,95 @@ pub fn init(conn: &Connection) -> Result<()> {
     if !has_deleted_at {
         conn.execute("ALTER TABLE notes ADD COLUMN deleted_at TEXT", [])?;
     }
+
+    // Migration: plain-text shadow of `content`, kept in sync on every write.
+    // Lets note listings and search skip the full HTML (which may embed
+    // base64 images) entirely.
+    let has_content_text: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('notes') WHERE name = 'content_text'")?
+        .exists([])?;
+    if !has_content_text {
+        conn.execute(
+            "ALTER TABLE notes ADD COLUMN content_text TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+        backfill_content_text(conn)?;
+    }
+
+    // Covers list_notes, list_trash and purge_expired.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notes_deleted_updated
+         ON notes (deleted_at, updated DESC)",
+        [],
+    )?;
     Ok(())
+}
+
+/// Populate `content_text` for rows that predate the column.
+fn backfill_content_text(conn: &Connection) -> Result<()> {
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT id, content FROM notes")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_>>()?;
+    let mut stmt = conn.prepare("UPDATE notes SET content_text = ?2 WHERE id = ?1")?;
+    for (id, content) in rows {
+        stmt.execute(params![id, strip_html(&content)])?;
+    }
+    Ok(())
+}
+
+/// Reduce note HTML to searchable plain text: tags (and everything inside
+/// them, e.g. base64 `src` attributes) are dropped, common entities decoded,
+/// and whitespace collapsed.
+pub fn strip_html(html: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    let mut chars = html.char_indices();
+    let mut last_space = true;
+    let push = |out: &mut String, c: char, last_space: &mut bool| {
+        if c.is_whitespace() {
+            if !*last_space {
+                out.push(' ');
+                *last_space = true;
+            }
+        } else {
+            out.push(c);
+            *last_space = false;
+        }
+    };
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '<' => {
+                in_tag = true;
+                // A tag boundary separates words ("<div>a</div><div>b</div>").
+                push(&mut out, ' ', &mut last_space);
+            }
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            '&' => {
+                // Decode the entities the editor actually produces.
+                let rest = &html[i..];
+                let known = [
+                    ("&nbsp;", ' '),
+                    ("&amp;", '&'),
+                    ("&lt;", '<'),
+                    ("&gt;", '>'),
+                    ("&quot;", '"'),
+                    ("&#39;", '\''),
+                ];
+                if let Some((ent, decoded)) = known.iter().find(|(e, _)| rest.starts_with(e)) {
+                    push(&mut out, *decoded, &mut last_space);
+                    for _ in 0..ent.chars().count() - 1 {
+                        chars.next();
+                    }
+                } else {
+                    push(&mut out, '&', &mut last_space);
+                }
+            }
+            c => push(&mut out, c, &mut last_space),
+        }
+    }
+    out.trim().to_string()
 }
 
 // ── Notes ───────────────────────────────────────────────────────────────────
@@ -55,29 +146,50 @@ fn row_to_note(row: &rusqlite::Row) -> Result<Note> {
 
 const SELECT_COLS: &str = "id, title, content, folder, favorite, created, updated, deleted_at";
 
-/// Active (non-trashed) notes.
-pub fn list_notes(conn: &Connection) -> Result<Vec<Note>> {
+fn row_to_summary(row: &rusqlite::Row) -> Result<NoteSummary> {
+    Ok(NoteSummary {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        folder: row.get(2)?,
+        favorite: row.get::<_, i64>(3)? != 0,
+        created: row.get(4)?,
+        updated: row.get(5)?,
+        deleted_at: row.get(6)?,
+        search_text: row.get(7)?,
+    })
+}
+
+const SUMMARY_COLS: &str =
+    "id, title, folder, favorite, created, updated, deleted_at, content_text";
+
+/// Active (non-trashed) notes, without their (potentially huge) content.
+pub fn list_notes(conn: &Connection) -> Result<Vec<NoteSummary>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM notes WHERE deleted_at IS NULL ORDER BY updated DESC, created DESC"
+        "SELECT {SUMMARY_COLS} FROM notes WHERE deleted_at IS NULL ORDER BY updated DESC, created DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], row_to_note)?;
+    let rows = stmt.query_map([], row_to_summary)?;
     rows.collect()
 }
 
 /// Notes currently in the trash, most recently deleted first.
-pub fn list_trash(conn: &Connection) -> Result<Vec<Note>> {
+pub fn list_trash(conn: &Connection) -> Result<Vec<NoteSummary>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM notes WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, updated DESC"
+        "SELECT {SUMMARY_COLS} FROM notes WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, updated DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], row_to_note)?;
+    let rows = stmt.query_map([], row_to_summary)?;
     rows.collect()
 }
 
 pub fn get_note(conn: &Connection, id: &str) -> Result<Option<Note>> {
     let sql = format!("SELECT {SELECT_COLS} FROM notes WHERE id = ?1");
     conn.query_row(&sql, params![id], row_to_note).optional()
+}
+
+pub fn get_summary(conn: &Connection, id: &str) -> Result<Option<NoteSummary>> {
+    let sql = format!("SELECT {SUMMARY_COLS} FROM notes WHERE id = ?1");
+    conn.query_row(&sql, params![id], row_to_summary).optional()
 }
 
 /// Every note (active and trashed) — used for full export/backup.
@@ -91,14 +203,15 @@ pub fn list_all_notes(conn: &Connection) -> Result<Vec<Note>> {
 /// Insert-or-replace a whole note (used when importing a backup).
 pub fn upsert_note(conn: &Connection, note: &Note) -> Result<()> {
     conn.execute(
-        "INSERT INTO notes (id, title, content, folder, favorite, created, updated, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO notes (id, title, content, content_text, folder, favorite, created, updated, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
-            title=?2, content=?3, folder=?4, favorite=?5, created=?6, updated=?7, deleted_at=?8",
+            title=?2, content=?3, content_text=?4, folder=?5, favorite=?6, created=?7, updated=?8, deleted_at=?9",
         params![
             note.id,
             note.title,
             note.content,
+            strip_html(&note.content),
             note.folder,
             note.favorite as i64,
             note.created,
@@ -111,12 +224,13 @@ pub fn upsert_note(conn: &Connection, note: &Note) -> Result<()> {
 
 pub fn insert_note(conn: &Connection, note: &Note) -> Result<()> {
     conn.execute(
-        "INSERT INTO notes (id, title, content, folder, favorite, created, updated)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO notes (id, title, content, content_text, folder, favorite, created, updated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             note.id,
             note.title,
             note.content,
+            strip_html(&note.content),
             note.folder,
             note.favorite as i64,
             note.created,
@@ -134,8 +248,8 @@ pub fn update_note(
     updated: &str,
 ) -> Result<()> {
     conn.execute(
-        "UPDATE notes SET title = ?2, content = ?3, updated = ?4 WHERE id = ?1",
-        params![id, title, content, updated],
+        "UPDATE notes SET title = ?2, content = ?3, content_text = ?4, updated = ?5 WHERE id = ?1",
+        params![id, title, content, strip_html(content), updated],
     )?;
     Ok(())
 }
@@ -187,12 +301,8 @@ pub fn purge_expired(conn: &Connection, cutoff: &str) -> Result<usize> {
 
 /// Flip a note's favorite flag and return the new value.
 pub fn toggle_favorite(conn: &Connection, id: &str) -> Result<bool> {
-    conn.execute(
-        "UPDATE notes SET favorite = 1 - favorite WHERE id = ?1",
-        params![id],
-    )?;
     let fav: i64 = conn.query_row(
-        "SELECT favorite FROM notes WHERE id = ?1",
+        "UPDATE notes SET favorite = 1 - favorite WHERE id = ?1 RETURNING favorite",
         params![id],
         |r| r.get(0),
     )?;
@@ -291,4 +401,27 @@ pub fn first_folder_except(conn: &Connection, exclude: &str) -> Result<Option<St
         |r| r.get(0),
     )
     .optional()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_html;
+
+    #[test]
+    fn drops_tags_and_their_attributes() {
+        let html = r#"<div>Hola <strong>mundo</strong></div><img src="data:image/png;base64,AAAA…">"#;
+        assert_eq!(strip_html(html), "Hola mundo");
+    }
+
+    #[test]
+    fn separates_adjacent_blocks_and_collapses_whitespace() {
+        assert_eq!(strip_html("<div>uno</div><div>dos</div>"), "uno dos");
+        assert_eq!(strip_html("a\n\n  b"), "a b");
+    }
+
+    #[test]
+    fn decodes_common_entities() {
+        assert_eq!(strip_html("a&nbsp;b &amp; c &lt;d&gt;"), "a b & c <d>");
+        assert_eq!(strip_html("tom&yerry"), "tom&yerry");
+    }
 }
