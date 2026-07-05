@@ -45,6 +45,16 @@ export default function App() {
     try { return localStorage.getItem("linux-notes-folder") || "all"; } catch { return "all"; }
   });
   const [searchQuery, setSearchQuery] = React.useState("");
+  // Debounced copy used for filtering, so the list isn't re-filtered on every keystroke.
+  const [debouncedQuery, setDebouncedQuery] = React.useState("");
+  React.useEffect(() => {
+    if (!searchQuery) {
+      setDebouncedQuery("");
+      return;
+    }
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 150);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
   const searchRef = React.useRef(null);
 
   const [newTag, setNewTag] = React.useState({ open: false, noteId: null, error: "" });
@@ -54,10 +64,8 @@ export default function App() {
 
   const trashMode = selectedFolder === "trash";
 
-  // Initial load.
-  const reloadNotes = React.useCallback(() => api.listNotes().then(setNotes), []);
-  const reloadTrash = React.useCallback(() => api.listTrash().then(setTrash), []);
-
+  // Initial load. Both lists hold lightweight summaries (no HTML content) —
+  // the selected note's content is fetched on demand below.
   React.useEffect(() => {
     api.listFolders().then(setFolders).catch((e) => console.error("Load folders failed:", e));
     api
@@ -71,8 +79,23 @@ export default function App() {
         if (pick) setSelectedId(pick.id);
       })
       .catch((e) => console.error("Load notes failed:", e));
-    reloadTrash().catch((e) => console.error("Load trash failed:", e));
-  }, [reloadNotes, reloadTrash]);
+    api.listTrash().then(setTrash).catch((e) => console.error("Load trash failed:", e));
+  }, []);
+
+  // Full note for the editor, loaded lazily whenever the selection changes.
+  const [selectedNote, setSelectedNote] = React.useState(null);
+  React.useEffect(() => {
+    if (!selectedId) {
+      setSelectedNote(null);
+      return;
+    }
+    let stale = false;
+    api
+      .getNote(selectedId)
+      .then((n) => { if (!stale) setSelectedNote(n); })
+      .catch((e) => console.error("Load note failed:", e));
+    return () => { stale = true; };
+  }, [selectedId]);
 
   // Persist the current note / folder so they're restored next launch.
   React.useEffect(() => {
@@ -85,12 +108,10 @@ export default function App() {
   // ── Derived: filtered + sorted ──
   const filteredNotes = React.useMemo(() => {
     const matchesQuery = (n) => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        n.title.toLowerCase().includes(q) ||
-        n.content.replace(/<[^>]+>/g, "").toLowerCase().includes(q)
-      );
+      if (!debouncedQuery) return true;
+      const q = debouncedQuery.toLowerCase();
+      // searchText is the plain-text shadow of the content, precomputed in SQLite.
+      return n.title.toLowerCase().includes(q) || (n.searchText || "").toLowerCase().includes(q);
     };
 
     if (trashMode) return trash.filter(matchesQuery); // already ordered by deletion date
@@ -102,9 +123,7 @@ export default function App() {
     else if (selectedFolder !== "all") list = list.filter((n) => n.folder === selectedFolder);
 
     return [...list.filter(matchesQuery)].sort((a, b) => b.updated.localeCompare(a.updated));
-  }, [notes, trash, trashMode, selectedFolder, searchQuery]);
-
-  const selectedNote = (trashMode ? trash : notes).find((n) => n.id === selectedId) || null;
+  }, [notes, trash, trashMode, selectedFolder, debouncedQuery]);
 
   // Keep a valid selection whenever the visible list changes.
   React.useEffect(() => {
@@ -115,6 +134,18 @@ export default function App() {
     }
   }, [filteredNotes, selectedId]);
 
+  // Summary shape (what the lists hold) derived from a freshly created note.
+  const summaryOf = (n) => ({
+    id: n.id,
+    title: n.title,
+    folder: n.folder,
+    favorite: n.favorite,
+    created: n.created,
+    updated: n.updated,
+    deletedAt: n.deletedAt,
+    searchText: "",
+  });
+
   // ── Notes CRUD ──
   const handleCreate = React.useCallback(async () => {
     const fallback = folders[0]?.name || "Personal";
@@ -122,7 +153,8 @@ export default function App() {
     try {
       const note = await api.createNote(folder);
       if (trashMode) setSelectedFolder("all");
-      setNotes((prev) => [note, ...prev]);
+      setNotes((prev) => [summaryOf(note), ...prev]);
+      setSelectedNote(note); // already complete — skip the lazy-load round trip
       setSelectedId(note.id);
     } catch (e) {
       console.error("Create failed:", e);
@@ -131,8 +163,14 @@ export default function App() {
 
   const handleUpdate = React.useCallback(async (id, changes) => {
     try {
-      const updated = await api.updateNote(id, changes.title, changes.content);
-      setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)));
+      const summary = await api.updateNote(id, changes.title, changes.content);
+      setNotes((prev) => prev.map((n) => (n.id === id ? summary : n)));
+      // Keep the editor's copy coherent (title/date shown in the meta row).
+      setSelectedNote((prev) =>
+        prev && prev.id === id
+          ? { ...prev, title: summary.title, updated: summary.updated, content: changes.content }
+          : prev
+      );
     } catch (e) {
       console.error("Update failed:", e);
     }
@@ -142,6 +180,7 @@ export default function App() {
     try {
       const favorite = await api.toggleFavorite(id);
       setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, favorite } : n)));
+      setSelectedNote((prev) => (prev && prev.id === id ? { ...prev, favorite } : prev));
     } catch (e) {
       console.error("Toggle favorite failed:", e);
     }
@@ -149,8 +188,11 @@ export default function App() {
 
   const handleChangeFolder = React.useCallback(async (id, folder) => {
     try {
-      const updated = await api.setNoteFolder(id, folder);
-      setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)));
+      const summary = await api.setNoteFolder(id, folder);
+      setNotes((prev) => prev.map((n) => (n.id === id ? summary : n)));
+      setSelectedNote((prev) =>
+        prev && prev.id === id ? { ...prev, folder: summary.folder, updated: summary.updated } : prev
+      );
     } catch (e) {
       console.error("Change tag failed:", e);
     }
@@ -167,25 +209,24 @@ export default function App() {
         message: `«${title}» se moverá a la papelera. Podrás restaurarla durante 30 días.`,
         confirmLabel: "Mover a la papelera",
         onConfirm: async () => {
-          await api.deleteNote(id);
-          await Promise.all([reloadNotes(), reloadTrash()]);
+          const summary = await api.deleteNote(id);
+          setNotes((prev) => prev.filter((n) => n.id !== id));
+          setTrash((prev) => [summary, ...prev]);
         },
       });
     },
-    [notes, reloadNotes, reloadTrash]
+    [notes]
   );
 
-  const handleRestore = React.useCallback(
-    async (id) => {
-      try {
-        await api.restoreNote(id);
-        await Promise.all([reloadNotes(), reloadTrash()]);
-      } catch (e) {
-        console.error("Restore failed:", e);
-      }
-    },
-    [reloadNotes, reloadTrash]
-  );
+  const handleRestore = React.useCallback(async (id) => {
+    try {
+      const summary = await api.restoreNote(id);
+      setTrash((prev) => prev.filter((n) => n.id !== id));
+      setNotes((prev) => [summary, ...prev]);
+    } catch (e) {
+      console.error("Restore failed:", e);
+    }
+  }, []);
 
   const askPurgeNote = React.useCallback(
     (id) => {
@@ -198,11 +239,11 @@ export default function App() {
         message: `«${title}» se eliminará para siempre. Esta acción no se puede deshacer.`,
         onConfirm: async () => {
           await api.purgeNote(id);
-          await reloadTrash();
+          setTrash((prev) => prev.filter((n) => n.id !== id));
         },
       });
     },
-    [trash, reloadTrash]
+    [trash]
   );
 
   const askEmptyTrash = React.useCallback(() => {
@@ -214,10 +255,10 @@ export default function App() {
       message: `Se eliminarán ${count} nota${count === 1 ? "" : "s"} para siempre. Esta acción no se puede deshacer.`,
       onConfirm: async () => {
         await api.emptyTrash();
-        await reloadTrash();
+        setTrash([]);
       },
     });
-  }, [trash, reloadTrash]);
+  }, [trash.length]);
 
   // ── Tags ──
   const openNewTag = React.useCallback((noteId) => {
@@ -238,9 +279,20 @@ export default function App() {
     [newTag.noteId, handleChangeFolder]
   );
 
+  // Per-folder and favorites counts in a single pass (Sidebar badges).
+  const counts = React.useMemo(() => {
+    const byFolder = {};
+    let favorites = 0;
+    for (const n of notes) {
+      byFolder[n.folder] = (byFolder[n.folder] || 0) + 1;
+      if (n.favorite) favorites += 1;
+    }
+    return { byFolder, favorites };
+  }, [notes]);
+
   const askDeleteTag = React.useCallback(
     (folder) => {
-      const used = notes.filter((n) => n.folder === folder.name).length;
+      const used = counts.byFolder[folder.name] || 0;
       const fallback = folders.find((f) => f.name !== folder.name)?.name;
       setConfirm({
         title: "Eliminar etiqueta",
@@ -254,17 +306,20 @@ export default function App() {
           const { fallback: moved } = await api.deleteFolder(folder.name);
           setFolders((prev) => prev.filter((f) => f.name !== folder.name));
           setNotes((prev) => prev.map((n) => (n.folder === folder.name ? { ...n, folder: moved } : n)));
+          setSelectedNote((prev) => (prev && prev.folder === folder.name ? { ...prev, folder: moved } : prev));
           if (selectedFolder === folder.name) setSelectedFolder("all");
         },
       });
     },
-    [notes, folders, selectedFolder]
+    [counts, folders, selectedFolder]
   );
 
-  const handleFolderSelect = (folder) => {
+  const handleFolderSelect = React.useCallback((folder) => {
     setSelectedFolder(folder);
     setSearchQuery("");
-  };
+  }, []);
+
+  const handleOpenSettings = React.useCallback(() => setSettingsOpen(true), []);
 
   // ── Backup: export / import ──
   const handleExport = React.useCallback(async () => {
@@ -317,14 +372,16 @@ export default function App() {
   return (
     <div className="app-root">
       <Sidebar
-        notes={notes}
+        noteCount={notes.length}
+        favCount={counts.favorites}
+        folderCounts={counts.byFolder}
         folders={folders}
         trashCount={trash.length}
         selectedFolder={selectedFolder}
         onSelectFolder={handleFolderSelect}
         onNewTag={openNewTag}
         onDeleteTag={askDeleteTag}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
       />
       <NoteListPanel
         notes={filteredNotes}
