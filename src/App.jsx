@@ -10,7 +10,7 @@ import * as api from "./api.js";
 export default function App() {
   // ── Appearance settings ──
   // Default mode is "auto" so a fresh install follows the system light/dark.
-  const [settings, setSetting] = useSettings({ variant: "paper", theme: "auto", fontSize: 15 });
+  const [settings, setSetting] = useSettings({ variant: "paper", theme: "auto", fontSize: 15, translucid: false });
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   React.useEffect(() => {
@@ -20,7 +20,7 @@ export default function App() {
       settings.theme === "auto" ? (mq.matches ? "dark" : "light") : settings.theme;
     const apply = () => {
       const t = resolved();
-      document.documentElement.className = `v-${settings.variant} t-${t}`;
+      document.documentElement.className = `v-${settings.variant} t-${t}${settings.translucid ? " v-translucid" : ""}`;
       document.documentElement.style.setProperty("--font-size", settings.fontSize + "px");
       // Retint the window icon to match the active theme accent (best-effort).
       applyThemedIcon();
@@ -34,7 +34,7 @@ export default function App() {
       mq.addEventListener("change", apply);
       return () => mq.removeEventListener("change", apply);
     }
-  }, [settings.variant, settings.theme, settings.fontSize]);
+  }, [settings.variant, settings.theme, settings.fontSize, settings.translucid]);
 
   // ── Data (source of truth lives in SQLite via the backend) ──
   const [notes, setNotes] = React.useState([]);

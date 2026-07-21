@@ -57,3 +57,9 @@ listing trashed notes, and finding expired trash efficient as the note count gro
 - **WHEN** the notes table holds thousands of rows
 - **THEN** listing active notes ordered by most-recently-updated uses the `(deleted_at, updated DESC)` index instead of a full table scan
 
+### Requirement: Persist Translucid Background Preference
+
+#### Scenario: Lauching with translucid enabled
+- **WHEN** the user enables translucid, closes the app, and relaunches
+- **THEN** the window loads in translucid mode without requiring re-enabling
+

@@ -58,3 +58,14 @@ hasn't changed since the last time it was applied.
 - **WHEN** the user switches to a variant with a different accent color
 - **THEN** the window icon is redrawn in the new accent color where the platform honors per-window icons
 
+### Requirement: Toggle Translucid Background
+The system SHALL provide a toggle in the Configuración panel labeled "Fondo translúcido" that
+controls whether the main window background is transparent.
+
+#### Scenario: Enabling translucid background
+- **WHEN** the user activates the "Fondo translúcido" toggle
+- **THEN** the toggle is saved and the translucid mode activates
+
+### Requirement: Show Platform Recommendation
+The system SHALL display "Recomendado para KDE Plasma con compositor" next to the toggle.
+

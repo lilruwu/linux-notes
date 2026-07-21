@@ -11,9 +11,17 @@ html, body, #root {
 
 /* Paint the themed background straight away (the bootstrap script in index.html
    sets the theme class before first paint), so there's no white flash on open. */
-html { background: var(--bg); color: var(--fg); }
+html { background: var(--bg); color: var(--fg); transition: background var(--t); }
 
 body { font-family: system-ui, -apple-system, 'Segoe UI', 'Ubuntu', sans-serif; }
+
+/* ── TRANSLUCID (transparent background for KDE compositor blur) ── */
+html.v-translucid { background: transparent; }
+html.v-translucid .app-root { background: transparent; }
+html.v-translucid .editor-panel { background: transparent; }
+html.v-translucid .note-list-panel { background: transparent; }
+html.v-translucid .editor-body { background: transparent; }
+html.v-translucid .no-selection { background: transparent; }
 
 /* ── THEME VARIABLES ──
    Light = pure white, Dark = pure black. The three styles (Papel / Pizarra /
@@ -262,6 +270,7 @@ html.v-forest.t-dark  { --accent: #6AAD72; --sel: rgba(106,173,114,0.18); --efon
   padding: 28px 44px 40px;
   display: flex; flex-direction: column;
   position: relative; /* anchor for the in-table "+" handles */
+  transition: background var(--t);
 }
 .editor-meta-row {
   display: flex; align-items: center; gap: 8px;
@@ -711,3 +720,13 @@ html.v-forest.t-dark  { --accent: #6AAD72; --sel: rgba(106,173,114,0.18); --efon
 
 .editor-title-static, .editor-content-static { cursor: default; }
 .editor-content-static { opacity: 0.92; }
+
+/* ── TRANSLUCID OVERRIDES ──────────────────────────────────
+   Kept in one spot so opaque chrome surfaces still render
+   above a transparent window background (KDE blur).       */
+html.v-translucid .sidebar { background: var(--bg2); }
+html.v-translucid .modal-card { background: var(--bg); }
+html.v-translucid .draw-modal { background: var(--bg); }
+html.v-translucid .trash-bar { background: var(--bg2); }
+html.v-translucid .editor-toolbar { background: var(--bg); }
+html.v-translucid .find-bar { background: var(--bg2); }

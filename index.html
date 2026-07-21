@@ -25,7 +25,7 @@
                 ? "dark"
                 : "light";
           }
-          d.className = "v-" + variant + " t-" + theme;
+          d.className = "v-" + variant + " t-" + theme + (s.translucid ? " v-translucid" : "");
           if (s.fontSize) d.style.setProperty("--font-size", s.fontSize + "px");
         } catch (e) {
           /* fall back to the class hard-coded on <html> */

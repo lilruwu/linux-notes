@@ -4,9 +4,8 @@ A native, fast desktop build of **Linux Notes**, an open-source Apple Notes
 alternative for Linux. The UI is the same warm, paper-inspired design from the
 prototype; the Rust backend stores notes in a local **SQLite** database.
 
-## Purpose
-
-This project is my playground for experimenting with OpenSpec and AI-Driven Development while building an application I've always wanted to have.
+> [!NOTE]
+> This project is my playground for experimenting with OpenSpec and AI-Driven Development while building an application I've always wanted to have.
 
 ## Features
 

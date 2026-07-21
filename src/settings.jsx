@@ -58,6 +58,18 @@ export function SettingsModal({ open, onClose, settings, onChange, onExport, onI
         />
       </Field>
 
+      <Field label="Fondo translúcido">
+        <Segmented
+          value={settings.translucid}
+          options={[
+            { value: false, label: "Desactivado" },
+            { value: true, label: "Activado" },
+          ]}
+          onChange={(v) => onChange("translucid", v)}
+        />
+        <p className="settings-hint">Recomendado para KDE Plasma con compositor.</p>
+      </Field>
+
       <div className="settings-section">Tipografía</div>
 
       <Field label="Tamaño del texto" value={`${settings.fontSize}px`}>
